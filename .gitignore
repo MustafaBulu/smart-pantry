@@ -12,6 +12,7 @@ target/
 
 # Logs
 *.log
+.env
 
 # BlueJ
 *.ctxt
