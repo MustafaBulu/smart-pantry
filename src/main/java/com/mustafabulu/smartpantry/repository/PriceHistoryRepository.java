@@ -5,6 +5,7 @@ import com.mustafabulu.smartpantry.model.Product;
 import com.mustafabulu.smartpantry.model.MarketplaceProduct;
 import com.mustafabulu.smartpantry.enums.Marketplace;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -48,9 +49,55 @@ public interface PriceHistoryRepository extends JpaRepository<PriceHistory, Long
             """)
     List<Product> findDistinctProducts();
 
+    @Query("""
+            select ph
+            from PriceHistory ph
+            where ph.product.id = :productId
+              and ph.marketplace = coalesce(:marketplace, ph.marketplace)
+              and ph.recordedAt >= coalesce(:startDate, ph.recordedAt)
+              and ph.recordedAt <= coalesce(:endDate, ph.recordedAt)
+            order by ph.recordedAt desc
+            """)
+    List<PriceHistory> findByProductIdAndFilters(
+            @Param("productId") Long productId,
+            @Param("marketplace") Marketplace marketplace,
+            @Param("startDate") LocalDateTime startDate,
+            @Param("endDate") LocalDateTime endDate
+    );
+
+    @Query("""
+            select ph
+            from PriceHistory ph
+            where ph.product.category.name = :categoryName
+              and ph.marketplace = coalesce(:marketplace, ph.marketplace)
+              and ph.recordedAt >= coalesce(:startDate, ph.recordedAt)
+              and ph.recordedAt <= coalesce(:endDate, ph.recordedAt)
+            order by ph.product.id, ph.recordedAt desc
+            """)
+    List<PriceHistory> findByCategoryNameAndFilters(
+            @Param("categoryName") String categoryName,
+            @Param("marketplace") Marketplace marketplace,
+            @Param("startDate") LocalDateTime startDate,
+            @Param("endDate") LocalDateTime endDate
+    );
+
     boolean existsByMarketplaceProductAndRecordedAtBetween(
             MarketplaceProduct marketplaceProduct,
             LocalDateTime start,
             LocalDateTime end
     );
+
+    @Modifying
+    @Query("""
+            delete from PriceHistory ph
+            where ph.product.id = :productId
+            """)
+    void deleteByProductId(@Param("productId") Long productId);
+
+    @Modifying
+    @Query("""
+            delete from PriceHistory ph
+            where ph.marketplaceProduct.id = :marketplaceProductId
+            """)
+    void deleteByMarketplaceProductId(@Param("marketplaceProductId") Long marketplaceProductId);
 }

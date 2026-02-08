@@ -7,6 +7,7 @@ import com.mustafabulu.smartpantry.core.response.ResponseMessages;
 import com.mustafabulu.smartpantry.core.exception.SPException;
 import com.mustafabulu.smartpantry.yemeksepeti.constant.YemeksepetiScraperConstants;
 import com.mustafabulu.smartpantry.yemeksepeti.model.YemeksepetiProductDetails;
+import lombok.AllArgsConstructor;
 import org.openqa.selenium.PageLoadStrategy;
 import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.chrome.ChromeDriver;
@@ -16,16 +17,22 @@ import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.function.Supplier;
 
 @Service
+@AllArgsConstructor
 public class YemeksepetiScraperService {
 
     private static final int MAX_RETRIES = 20;
     private static final long RETRY_SLEEP_MS = 500L;
+    private final Supplier<WebDriver> driverSupplier;
+
+    public YemeksepetiScraperService() {
+        this(() -> new ChromeDriver(buildOptions()));
+    }
 
     public YemeksepetiProductDetails fetchProductDetails(String url) {
-        ChromeOptions options = buildOptions();
-        WebDriver driver = new ChromeDriver(options);
+        WebDriver driver = driverSupplier.get();
 
         try {
             driver.get(url);
@@ -58,7 +65,7 @@ public class YemeksepetiScraperService {
         }
     }
 
-    private ChromeOptions buildOptions() {
+    private static ChromeOptions buildOptions() {
         ChromeOptions options = new ChromeOptions();
         Map<String, Object> prefs = new HashMap<>();
         prefs.put(YemeksepetiScraperConstants.PREFS_IMAGES_KEY, YemeksepetiScraperConstants.PREFS_IMAGES_DISABLED);

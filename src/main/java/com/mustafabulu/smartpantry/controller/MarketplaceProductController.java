@@ -1,49 +1,71 @@
 package com.mustafabulu.smartpantry.controller;
 
-import com.mustafabulu.smartpantry.dto.MarketplaceProductRequest;
-import com.mustafabulu.smartpantry.dto.ProductResponse;
-import com.mustafabulu.smartpantry.dto.ProductSearchRequest;
-import com.mustafabulu.smartpantry.service.MarketplaceProductService;
-import com.mustafabulu.smartpantry.service.ProductSearchService;
-import jakarta.validation.Valid;
-import jakarta.validation.constraints.NotBlank;
-import lombok.AllArgsConstructor;
+import com.mustafabulu.smartpantry.core.exception.ErrorData;
+import com.mustafabulu.smartpantry.dto.request.BulkAddRequest;
+import com.mustafabulu.smartpantry.dto.response.BulkAddResponse;
+import com.mustafabulu.smartpantry.dto.request.MarketplaceProductRequest;
+import com.mustafabulu.smartpantry.dto.response.ProductResponse;
+import com.mustafabulu.smartpantry.dto.request.ProductSearchRequest;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
-import org.springframework.validation.annotation.Validated;
 
 import java.util.List;
 
-@RestController
-@AllArgsConstructor
-@Validated
-@RequestMapping("/marketplaces")
-public class MarketplaceProductController {
+@Tag(name = "Marketplaces", description = "Marketplace product management APIs")
+public interface MarketplaceProductController {
 
-    private final MarketplaceProductService marketplaceProductService;
-    private final ProductSearchService productSearchService;
+    @Operation(summary = "Add a product to a marketplace category")
+    @ApiResponse(responseCode = "200", description = "Product already tracked",
+            content = @Content(schema = @Schema(implementation = String.class)))
+    @ApiResponse(responseCode = "201", description = "Product created",
+            content = @Content(schema = @Schema(implementation = String.class)))
+    @ApiResponse(responseCode = "400", description = "Validation error",
+            content = @Content(schema = @Schema(implementation = ErrorData.class)))
+    @ApiResponse(responseCode = "404", description = "Category or product not found",
+            content = @Content(schema = @Schema(implementation = ErrorData.class)))
+    ResponseEntity<String> addProduct(
+            String marketplaceCode,
+            String categoryName,
+            MarketplaceProductRequest request
+    );
 
-    @PostMapping("/{marketplaceCode}/categories/{categoryName}/addproduct")
-    public ResponseEntity<String> addProduct(
-            @PathVariable @NotBlank String marketplaceCode,
-            @PathVariable @NotBlank String categoryName,
-            @Valid @RequestBody MarketplaceProductRequest request
-    ) {
-        MarketplaceProductService.AddProductResult result = marketplaceProductService.addProduct(
-                marketplaceCode,
-                categoryName,
-                request.productId()
-        );
-        return ResponseEntity.status(result.status()).body(result.message());
-    }
+    @Operation(summary = "Bulk add marketplace products to a category")
+    @ApiResponse(responseCode = "200", description = "Bulk add completed")
+    @ApiResponse(responseCode = "400", description = "Validation error",
+            content = @Content(schema = @Schema(implementation = ErrorData.class)))
+    @ApiResponse(responseCode = "404", description = "Category not found",
+            content = @Content(schema = @Schema(implementation = ErrorData.class)))
+    ResponseEntity<BulkAddResponse> addProductsBulk(
+            String marketplaceCode,
+            String categoryName,
+            BulkAddRequest request
+    );
 
-    @GetMapping("/products")
-    public ResponseEntity<List<ProductResponse>> searchProducts(@Valid ProductSearchRequest request) {
-        return ResponseEntity.ok(productSearchService.search(request));
-    }
+    @Operation(summary = "Refresh a marketplace product and record price history")
+    @ApiResponse(responseCode = "200", description = "Product refreshed",
+            content = @Content(schema = @Schema(implementation = String.class)))
+    @ApiResponse(responseCode = "400", description = "Validation error",
+            content = @Content(schema = @Schema(implementation = ErrorData.class)))
+    @ApiResponse(responseCode = "404", description = "Marketplace product not found",
+            content = @Content(schema = @Schema(implementation = ErrorData.class)))
+    @ApiResponse(responseCode = "409", description = "Ambiguous marketplace product",
+            content = @Content(schema = @Schema(implementation = ErrorData.class)))
+    ResponseEntity<String> deleteMarketplaceProduct(
+            String marketplaceCode,
+            String externalId,
+            @Parameter(description = "Optional category name to disambiguate", example = "Snacks")
+            String categoryName
+    );
+
+    @Operation(summary = "Search products by marketplace and/or category")
+    @ApiResponse(responseCode = "200", description = "Product list returned")
+    @ApiResponse(responseCode = "400", description = "Validation error",
+            content = @Content(schema = @Schema(implementation = ErrorData.class)))
+    ResponseEntity<List<ProductResponse>> searchProducts(ProductSearchRequest request);
 }
+

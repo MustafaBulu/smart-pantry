@@ -1,7 +1,7 @@
 package com.mustafabulu.smartpantry.service;
 
-import com.mustafabulu.smartpantry.dto.ProductResponse;
-import com.mustafabulu.smartpantry.dto.ProductSearchRequest;
+import com.mustafabulu.smartpantry.dto.response.ProductResponse;
+import com.mustafabulu.smartpantry.dto.request.ProductSearchRequest;
 import com.mustafabulu.smartpantry.enums.Marketplace;
 import com.mustafabulu.smartpantry.model.Product;
 import com.mustafabulu.smartpantry.repository.PriceHistoryRepository;
@@ -49,3 +49,4 @@ public class ProductSearchService {
                 .toList();
     }
 }
+

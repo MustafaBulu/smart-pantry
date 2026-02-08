@@ -18,6 +18,20 @@ public final class ResponseMessages {
     public static final String YEMEKSEPETI_FETCH_FAILED_CODE = "YEMEKSEPETI_FETCH_FAILED";
     public static final String CATEGORY_NAME_REQUIRED = "Category name is required.";
     public static final String CATEGORY_NAME_REQUIRED_CODE = "CATEGORY_NAME_REQUIRED";
+    public static final String CATEGORY_ALREADY_EXISTS = "Category already exists.";
+    public static final String CATEGORY_ALREADY_EXISTS_CODE = "CATEGORY_ALREADY_EXISTS";
+    public static final String CATEGORY_IN_USE = "Category is in use.";
+    public static final String CATEGORY_IN_USE_CODE = "CATEGORY_IN_USE";
+    public static final String CATEGORY_NOT_FOUND_CODE = "CATEGORY_NOT_FOUND";
+    public static final String PRODUCT_UPDATE_EMPTY = "No fields provided to update.";
+    public static final String PRODUCT_UPDATE_EMPTY_CODE = "PRODUCT_UPDATE_EMPTY";
+    public static final String MARKETPLACE_PRODUCT_NOT_FOUND = "Marketplace product not found.";
+    public static final String MARKETPLACE_PRODUCT_AMBIGUOUS = "Multiple marketplace products found. Provide categoryName.";
+    public static final String MARKETPLACE_REFRESH_FAILED = "Product refresh failed.";
+    public static final String MARKETPLACE_REFRESHED = "Product refreshed.";
+    public static final String MARKETPLACE_PRODUCT_REMOVED = "Marketplace product removed.";
+    public static final String PRODUCT_REMOVED = "Product removed.";
+    public static final String CATEGORY_REMOVED = "Category removed.";
 
     private ResponseMessages() {
     }
