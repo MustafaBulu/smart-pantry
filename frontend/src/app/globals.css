@@ -1,0 +1,29 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f7f4ef;
+  --foreground: #101010;
+  --surface: #ffffff;
+  --muted: #6b655c;
+  --accent: #d97706;
+  --accent-strong: #9a5c00;
+  --ring: rgba(217, 119, 6, 0.25);
+  --font-body: "Trebuchet MS", sans-serif;
+  --font-display: "Times New Roman", serif;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-body);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-body), "Trebuchet MS", sans-serif;
+}
+
+.display {
+  font-family: var(--font-display), "Times New Roman", serif;
+}

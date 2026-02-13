@@ -60,3 +60,10 @@ build/
 
 ### VS Code ###
 .vscode/
+
+# Local helper files
+run-frontend.cmd
+seed_price_history_last_year.sql
+
+# Generated frontend static export copied into backend resources
+src/main/resources/static/
