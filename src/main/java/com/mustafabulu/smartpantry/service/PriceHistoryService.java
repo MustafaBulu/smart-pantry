@@ -2,6 +2,7 @@ package com.mustafabulu.smartpantry.service;
 
 import com.mustafabulu.smartpantry.core.exception.SPException;
 import com.mustafabulu.smartpantry.core.response.ResponseMessages;
+import com.mustafabulu.smartpantry.core.util.MarketplaceCodeResolver;
 import com.mustafabulu.smartpantry.dto.response.CategoryPriceSummaryResponse;
 import com.mustafabulu.smartpantry.dto.response.PriceHistoryResponse;
 import com.mustafabulu.smartpantry.enums.Marketplace;
@@ -80,7 +81,7 @@ public class PriceHistoryService {
                     ResponseMessages.CATEGORY_NAME_REQUIRED_CODE
             );
         }
-        Category category = categoryRepository.findByName(trimmedCategory)
+        Category category = categoryRepository.findByNameIgnoreCase(trimmedCategory)
                 .orElseThrow(() -> new SPException(
                         HttpStatus.NOT_FOUND,
                         ResponseMessages.CATEGORY_NOT_FOUND,
@@ -121,18 +122,7 @@ public class PriceHistoryService {
     }
 
     private Marketplace resolveMarketplace(String marketplaceCode) {
-        if (marketplaceCode == null || marketplaceCode.isBlank()) {
-            return null;
-        }
-        Marketplace marketplace = Marketplace.fromCode(marketplaceCode);
-        if (marketplace == null) {
-            throw new SPException(
-                    HttpStatus.BAD_REQUEST,
-                    ResponseMessages.INVALID_MARKETPLACE_CODE,
-                    ResponseMessages.INVALID_MARKETPLACE_CODE
-            );
-        }
-        return marketplace;
+        return MarketplaceCodeResolver.resolveNullable(marketplaceCode);
     }
 
     private static class Summary {

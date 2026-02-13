@@ -38,7 +38,7 @@ public class MarketplaceProductService {
             return AddProductResult.badRequest(ResponseMessages.INVALID_MARKETPLACE_CODE);
         }
 
-        Category category = categoryRepository.findByName(categoryName.trim())
+        Category category = categoryRepository.findByNameIgnoreCase(categoryName.trim())
                 .orElse(null);
         if (category == null) {
             return AddProductResult.notFound(ResponseMessages.CATEGORY_NOT_FOUND);
@@ -140,7 +140,7 @@ public class MarketplaceProductService {
                 externalId.trim()
         );
         if (categoryName != null && !categoryName.isBlank()) {
-            Category category = categoryRepository.findByName(categoryName.trim())
+            Category category = categoryRepository.findByNameIgnoreCase(categoryName.trim())
                     .orElse(null);
             if (category == null) {
                 return DeleteMarketplaceProductResult.notFound(ResponseMessages.CATEGORY_NOT_FOUND);
@@ -176,7 +176,7 @@ public class MarketplaceProductService {
                 externalId.trim()
         );
         if (categoryName != null && !categoryName.isBlank()) {
-            Category category = categoryRepository.findByName(categoryName.trim())
+            Category category = categoryRepository.findByNameIgnoreCase(categoryName.trim())
                     .orElse(null);
             if (category == null) {
                 return RefreshProductResult.notFound(ResponseMessages.CATEGORY_NOT_FOUND);
@@ -249,4 +249,3 @@ public class MarketplaceProductService {
         }
     }
 }
-

@@ -7,6 +7,8 @@ public record ProductResponse(
         @Schema(description = "Product id", example = "10")
         Long id,
         @Schema(description = "Product name", example = "Potato Chips 150g")
-        String name
+        String name,
+        @Schema(description = "Latest product price", example = "99.90")
+        java.math.BigDecimal price
 ) {
 }

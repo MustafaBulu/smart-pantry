@@ -90,7 +90,7 @@ class PriceHistoryServiceTest {
         Category category = new Category();
         category.setId(2L);
         category.setName("Snacks");
-        when(categoryRepository.findByName("Snacks")).thenReturn(Optional.of(category));
+        when(categoryRepository.findByNameIgnoreCase("Snacks")).thenReturn(Optional.of(category));
         Product product = new Product();
         product.setId(3L);
         product.setName("Chips");
@@ -118,7 +118,7 @@ class PriceHistoryServiceTest {
 
     @Test
     void getCategorySummaryThrowsWhenMissingCategory() {
-        when(categoryRepository.findByName("Snacks")).thenReturn(Optional.empty());
+        when(categoryRepository.findByNameIgnoreCase("Snacks")).thenReturn(Optional.empty());
 
         assertThrows(SPException.class, () -> priceHistoryService.getCategorySummary("Snacks", null, null, null));
     }
@@ -137,7 +137,7 @@ class PriceHistoryServiceTest {
         Category category = new Category();
         category.setId(1L);
         category.setName("Snacks");
-        when(categoryRepository.findByName("Snacks")).thenReturn(Optional.of(category));
+        when(categoryRepository.findByNameIgnoreCase("Snacks")).thenReturn(Optional.of(category));
 
         assertThrows(SPException.class, () -> priceHistoryService.getCategorySummary("Snacks", "XX", null, null));
     }

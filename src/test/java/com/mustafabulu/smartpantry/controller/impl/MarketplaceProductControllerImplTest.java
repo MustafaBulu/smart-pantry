@@ -10,6 +10,7 @@ import com.mustafabulu.smartpantry.service.ProductSearchService;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -65,7 +66,7 @@ class MarketplaceProductControllerImplTest {
         ProductSearchService searchService = mock(ProductSearchService.class);
         MarketplaceProductControllerImpl controller = new MarketplaceProductControllerImpl(marketplaceService, searchService);
         when(searchService.search(new ProductSearchRequest("YS", "Snacks")))
-                .thenReturn(List.of(new ProductResponse(1L, "Chips")));
+                .thenReturn(List.of(new ProductResponse(1L, "Chips", BigDecimal.TEN)));
 
         var response = controller.searchProducts(new ProductSearchRequest("YS", "Snacks"));
 

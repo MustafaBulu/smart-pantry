@@ -15,6 +15,7 @@ import com.mustafabulu.smartpantry.service.PlatformProductDetailsService;
 import com.mustafabulu.smartpantry.core.log.LogMessages;
 import com.mustafabulu.smartpantry.core.util.ProductUrlResolver;
 import com.mustafabulu.smartpantry.core.util.ProductUnitUpdater;
+import com.mustafabulu.smartpantry.core.util.NameFormatter;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -44,7 +45,7 @@ public class YemeksepetiProductDetailsService implements PlatformProductDetailsS
             return;
         }
         String trimmedCategory = categoryName.trim();
-        Category category = categoryRepository.findByName(trimmedCategory)
+        Category category = categoryRepository.findByNameIgnoreCase(trimmedCategory)
                 .orElseGet(() -> {
                     Category created = new Category();
                     created.setName(trimmedCategory);
@@ -80,10 +81,11 @@ public class YemeksepetiProductDetailsService implements PlatformProductDetailsS
         }
 
         String detailsName = details.name();
-        String productName = (detailsName != null && !detailsName.isBlank())
+        String rawName = (detailsName != null && !detailsName.isBlank())
                 ? detailsName
                 : "Yemeksepeti Urun " + marketplaceProduct.getExternalId();
-        Product product = productRepository.findByNameAndCategory(productName, category)
+        String productName = NameFormatter.capitalizeFirstLetter(rawName);
+        Product product = productRepository.findByNameIgnoreCaseAndCategory(productName, category)
                 .orElseGet(() -> {
                     Product created = new Product();
                     created.setCategory(category);
@@ -96,6 +98,11 @@ public class YemeksepetiProductDetailsService implements PlatformProductDetailsS
                     }
                     return productRepository.save(created);
                 });
+        String normalizedName = NameFormatter.capitalizeFirstLetter(product.getName());
+        if (normalizedName != null && !normalizedName.equals(product.getName())) {
+            product.setName(normalizedName);
+            productRepository.save(product);
+        }
         ProductUnitUpdater.updateUnitIfMissing(
                 product,
                 details.unit(),

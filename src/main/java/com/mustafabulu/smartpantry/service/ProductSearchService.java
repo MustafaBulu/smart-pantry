@@ -3,11 +3,15 @@ package com.mustafabulu.smartpantry.service;
 import com.mustafabulu.smartpantry.dto.response.ProductResponse;
 import com.mustafabulu.smartpantry.dto.request.ProductSearchRequest;
 import com.mustafabulu.smartpantry.enums.Marketplace;
+import com.mustafabulu.smartpantry.model.PriceHistory;
 import com.mustafabulu.smartpantry.model.Product;
 import com.mustafabulu.smartpantry.repository.PriceHistoryRepository;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
+import java.util.LinkedHashMap;
 
 @Service
 public class ProductSearchService {
@@ -44,9 +48,34 @@ public class ProductSearchService {
             products = priceHistoryRepository.findDistinctProducts();
         }
 
+        Map<Long, BigDecimal> latestPrices = resolveLatestPrices(marketplace, products);
         return products.stream()
-                .map(product -> new ProductResponse(product.getId(), product.getName()))
+                .map(product -> new ProductResponse(
+                        product.getId(),
+                        product.getName(),
+                        latestPrices.get(product.getId())
+                ))
                 .toList();
+    }
+
+    private Map<Long, BigDecimal> resolveLatestPrices(
+            Marketplace marketplace,
+            List<Product> products
+    ) {
+        if (marketplace == null || products.isEmpty()) {
+            return Map.of();
+        }
+        List<Long> productIds = products.stream()
+                .map(Product::getId)
+                .toList();
+        List<PriceHistory> histories = priceHistoryRepository
+                .findLatestByMarketplaceAndProductIds(marketplace, productIds);
+        Map<Long, BigDecimal> latestPrices = new LinkedHashMap<>();
+        for (PriceHistory history : histories) {
+            Long productId = history.getProduct().getId();
+            latestPrices.putIfAbsent(productId, history.getPrice());
+        }
+        return latestPrices;
     }
 }
 

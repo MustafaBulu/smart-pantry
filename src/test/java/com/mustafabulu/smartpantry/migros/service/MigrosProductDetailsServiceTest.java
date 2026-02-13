@@ -64,7 +64,7 @@ class MigrosProductDetailsServiceTest {
     void recordDailyDetailsSkipsBlankCategory() {
         service.recordDailyDetails(" ");
 
-        verify(categoryRepository, never()).findByName(any());
+        verify(categoryRepository, never()).findByNameIgnoreCase(any());
     }
 
     @Test
@@ -88,8 +88,6 @@ class MigrosProductDetailsServiceTest {
         marketplaceProduct.setProductUrl("https://example");
         when(priceHistoryRepository.existsByMarketplaceProductAndRecordedAtBetween(any(), any(), any()))
                 .thenReturn(false);
-        when(marketplaceUrlProperties.getMigrosPrefix()).thenReturn("https://example/");
-        when(marketplaceUrlProperties.getMigrosSuffix()).thenReturn("?x=1");
         when(scraperService.fetchProductDetails("https://example")).thenReturn(null);
 
         boolean result = service.recordDetailsForProduct(category, marketplaceProduct);
@@ -106,11 +104,9 @@ class MigrosProductDetailsServiceTest {
         marketplaceProduct.setProductUrl("https://example");
         when(priceHistoryRepository.existsByMarketplaceProductAndRecordedAtBetween(any(), any(), any()))
                 .thenReturn(false);
-        when(marketplaceUrlProperties.getMigrosPrefix()).thenReturn("https://example/");
-        when(marketplaceUrlProperties.getMigrosSuffix()).thenReturn("?x=1");
         when(scraperService.fetchProductDetails("https://example"))
                 .thenReturn(new MigrosProductDetails("Chips", 12.5, "g", 150, "Brand"));
-        when(productRepository.findByNameAndCategory("Chips", category)).thenReturn(Optional.empty());
+        when(productRepository.findByNameIgnoreCaseAndCategory("Chips", category)).thenReturn(Optional.empty());
         when(productRepository.save(any(Product.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -125,7 +121,7 @@ class MigrosProductDetailsServiceTest {
         Category category = new Category();
         category.setName("Snacks");
         MarketplaceProduct marketplaceProduct = new MarketplaceProduct();
-        when(categoryRepository.findByName("Snacks")).thenReturn(Optional.of(category));
+        when(categoryRepository.findByNameIgnoreCase("Snacks")).thenReturn(Optional.of(category));
         when(marketplaceProductRepository.findByMarketplaceAndCategory(any(), any()))
                 .thenReturn(List.of(marketplaceProduct));
         when(priceHistoryRepository.existsByMarketplaceProductAndRecordedAtBetween(any(), any(), any()))

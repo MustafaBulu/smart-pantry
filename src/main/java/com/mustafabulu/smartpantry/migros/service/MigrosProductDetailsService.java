@@ -15,6 +15,7 @@ import com.mustafabulu.smartpantry.repository.ProductRepository;
 import com.mustafabulu.smartpantry.service.PlatformProductDetailsService;
 import com.mustafabulu.smartpantry.core.util.ProductUrlResolver;
 import com.mustafabulu.smartpantry.core.util.ProductUnitUpdater;
+import com.mustafabulu.smartpantry.core.util.NameFormatter;
 import lombok.AllArgsConstructor;
 import com.mustafabulu.smartpantry.core.log.LogMessages;
 import lombok.extern.slf4j.Slf4j;
@@ -51,7 +52,7 @@ public class MigrosProductDetailsService implements PlatformProductDetailsServic
             return;
         }
 
-        Category category = categoryRepository.findByName(trimmedCategory)
+        Category category = categoryRepository.findByNameIgnoreCase(trimmedCategory)
                 .orElse(null);
         if (category == null) {
             return;
@@ -132,7 +133,7 @@ public class MigrosProductDetailsService implements PlatformProductDetailsServic
             MigrosProductDetails details
     ) {
         String productName = resolveProductName(details, marketplaceProduct);
-        return productRepository.findByNameAndCategory(productName, category)
+        return productRepository.findByNameIgnoreCaseAndCategory(productName, category)
                 .orElseGet(() -> {
                     Product created = new Product();
                     created.setCategory(category);
@@ -145,13 +146,19 @@ public class MigrosProductDetailsService implements PlatformProductDetailsServic
 
     private String resolveProductName(MigrosProductDetails details, MarketplaceProduct marketplaceProduct) {
         String detailsName = details.name();
-        return (detailsName != null && !detailsName.isBlank())
+        String resolvedName = (detailsName != null && !detailsName.isBlank())
                 ? detailsName
                 : "Migros Urun " + marketplaceProduct.getExternalId();
+        return NameFormatter.capitalizeFirstLetter(resolvedName);
     }
 
     private void updateProductIfMissing(Product product, MigrosProductDetails details) {
         boolean updated = false;
+        String normalizedName = NameFormatter.capitalizeFirstLetter(product.getName());
+        if (normalizedName != null && !normalizedName.equals(product.getName())) {
+            product.setName(normalizedName);
+            updated = true;
+        }
         if (details.brand() != null && !details.brand().isBlank() && product.getBrand() == null) {
             product.setBrand(details.brand());
             updated = true;

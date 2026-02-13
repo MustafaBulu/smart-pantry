@@ -3,6 +3,8 @@ package com.mustafabulu.smartpantry.controller;
 import com.mustafabulu.smartpantry.core.exception.ErrorData;
 import com.mustafabulu.smartpantry.dto.request.CategoryRequest;
 import com.mustafabulu.smartpantry.dto.response.CategoryResponse;
+import com.mustafabulu.smartpantry.dto.response.MarketplaceProductCandidateResponse;
+import com.mustafabulu.smartpantry.dto.response.MarketplaceProductEntryResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -43,6 +45,19 @@ public interface CategoryController {
     @ApiResponse(responseCode = "409", description = "Category in use",
             content = @Content(schema = @Schema(implementation = ErrorData.class)))
     ResponseEntity<String> deleteCategory(Long id);
+
+    @Operation(summary = "List marketplace candidates for a category")
+    @ApiResponse(responseCode = "200", description = "Marketplace candidates returned")
+    @ApiResponse(responseCode = "404", description = "Category not found",
+            content = @Content(schema = @Schema(implementation = ErrorData.class)))
+    ResponseEntity<List<MarketplaceProductCandidateResponse>> listMarketplaceCandidates(Long id);
+
+    @Operation(summary = "List added marketplace products for a category")
+    @ApiResponse(responseCode = "200", description = "Marketplace products returned")
+    @ApiResponse(responseCode = "404", description = "Category not found",
+            content = @Content(schema = @Schema(implementation = ErrorData.class)))
+    ResponseEntity<List<MarketplaceProductEntryResponse>> listMarketplaceProducts(
+            Long id,
+            String marketplaceCode
+    );
 }
-
-

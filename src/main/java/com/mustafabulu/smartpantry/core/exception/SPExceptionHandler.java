@@ -2,14 +2,15 @@ package com.mustafabulu.smartpantry.core.exception;
 
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
+import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
-import org.springframework.lang.NonNull;
-import org.springframework.lang.Nullable;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -23,9 +24,7 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 
 import static com.mustafabulu.smartpantry.core.log.LogMessages.EXCEPTION;
-import static com.mustafabulu.smartpantry.core.log.LogMessages.EXCEPTION_WITH_MESSAGE;
 import static com.mustafabulu.smartpantry.core.log.LogMessages.UNEXPECTED_ERROR;
-import static com.mustafabulu.smartpantry.core.log.LogMessages.UNEXPECTED_TRACE;
 import static com.mustafabulu.smartpantry.core.log.LogMessages.VALIDATION_FAILED;
 import static com.mustafabulu.smartpantry.core.response.ResponseMessages.ALREADY_ADDED;
 import static com.mustafabulu.smartpantry.core.response.ResponseMessages.ALREADY_ADDED_CODE;
@@ -36,11 +35,12 @@ import static com.mustafabulu.smartpantry.core.response.ResponseMessages.UNKNOWN
 @Slf4j
 @RestControllerAdvice
 @Order(Ordered.HIGHEST_PRECEDENCE)
+@NullMarked
 public class SPExceptionHandler extends ResponseEntityExceptionHandler {
 
     @Override
     protected ResponseEntity<Object> handleMethodArgumentNotValid(
-            MethodArgumentNotValidException ex,
+            @NonNull MethodArgumentNotValidException ex,
             @NonNull HttpHeaders headers,
             @NonNull HttpStatusCode status,
             @NonNull WebRequest request
@@ -56,7 +56,7 @@ public class SPExceptionHandler extends ResponseEntityExceptionHandler {
                 HttpStatus.BAD_REQUEST.value(),
                 NOT_VALID,
                 validationErrors,
-                ((ServletWebRequest) request).getRequest().getRequestURI()
+                getRequestUri(request)
         );
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorData);
@@ -64,18 +64,23 @@ public class SPExceptionHandler extends ResponseEntityExceptionHandler {
 
     @ExceptionHandler(SPException.class)
     protected ResponseEntity<Object> handleAppException(SPException ex, WebRequest request) {
-        log.error(EXCEPTION_WITH_MESSAGE, EXCEPTION, ex.getMessage());
-        log.error(EXCEPTION_WITH_MESSAGE, EXCEPTION, ex.getReason());
+        log.error(
+                "{} status={}, message={}, reason={}",
+                EXCEPTION,
+                ex.getStatusCode(),
+                ex.getMessage(),
+                ex.getReason()
+        );
 
         String reason = Objects.toString(ex.getReason(), ex.getStatusCode().toString());
-        String message = ex.getCause() != null ? ex.getCause().getMessage() : reason;
+        String errorCode = ex.getCause() != null ? ex.getCause().getMessage() : ex.getStatusCode().toString();
 
         return ResponseEntity.status(ex.getStatusCode()).body(new ErrorData(
                 LocalDateTime.now().toString(),
                 ex.getStatusCode().value(),
+                errorCode,
                 reason,
-                message,
-                ((ServletWebRequest) request).getRequest().getRequestURI()
+                getRequestUri(request)
         ));
     }
 
@@ -86,53 +91,50 @@ public class SPExceptionHandler extends ResponseEntityExceptionHandler {
             @NonNull HttpStatusCode status,
             @NonNull WebRequest request
     ) {
-        log.error(EXCEPTION_WITH_MESSAGE, EXCEPTION, ex.getMessage());
-        log.error(EXCEPTION_WITH_MESSAGE, EXCEPTION, ex);
+        log.error("{} missing servlet request parameter: {}", EXCEPTION, ex.getMessage(), ex);
 
         return ResponseEntity.status(status).body(new ErrorData(
                 LocalDateTime.now().toString(),
                 status.value(),
                 ex.getMessage(),
                 NOT_VALID,
-                ((ServletWebRequest) request).getRequest().getRequestURI()
+                getRequestUri(request)
         ));
     }
 
     @ExceptionHandler(Exception.class)
     protected ResponseEntity<Object> handle(Exception ex, WebRequest request) {
         if (ex.getCause() instanceof ConstraintViolationException) {
-            log.error(EXCEPTION_WITH_MESSAGE, EXCEPTION, ex.getMessage());
+            log.error("{} conflict caused by constraint violation: {}", EXCEPTION, ex.getMessage(), ex);
             return ResponseEntity.status(HttpStatus.CONFLICT).body(new ErrorData(
                     LocalDateTime.now().toString(),
                     HttpStatus.CONFLICT.value(),
                     ALREADY_ADDED,
                     ALREADY_ADDED_CODE,
-                    ((ServletWebRequest) request).getRequest().getRequestURI()
+                    getRequestUri(request)
             ));
         }
 
-        log.error(UNEXPECTED_ERROR, ex.getMessage());
-        log.error(UNEXPECTED_TRACE, ex);
+        log.error(UNEXPECTED_ERROR, ex.getMessage(), ex);
 
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(new ErrorData(
                 LocalDateTime.now().toString(),
                 HttpStatus.INTERNAL_SERVER_ERROR.value(),
                 UNKNOWN_EXCEPTION,
                 UNKNOWN_ERR,
-                ((ServletWebRequest) request).getRequest().getRequestURI()
+                getRequestUri(request)
         ));
     }
 
     @Override
     protected ResponseEntity<Object> handleExceptionInternal(
-            Exception ex,
+            @NonNull Exception ex,
             @Nullable Object body,
             @NonNull HttpHeaders headers,
             @NonNull HttpStatusCode statusCode,
             @NonNull WebRequest request
     ) {
-        log.error(UNEXPECTED_ERROR, ex.getMessage());
-        log.error(UNEXPECTED_TRACE, ex);
+        log.error(UNEXPECTED_ERROR, ex.getMessage(), ex);
 
         if (!HttpStatus.INTERNAL_SERVER_ERROR.equals(statusCode)) {
             return new ResponseEntity<>(body, headers, statusCode);
@@ -142,7 +144,14 @@ public class SPExceptionHandler extends ResponseEntityExceptionHandler {
                 statusCode.value(),
                 UNKNOWN_EXCEPTION,
                 UNKNOWN_ERR,
-                ((ServletWebRequest) request).getRequest().getRequestURI()
+                getRequestUri(request)
         ));
+    }
+
+    private static String getRequestUri(WebRequest request) {
+        if (request instanceof ServletWebRequest servletWebRequest) {
+            return servletWebRequest.getRequest().getRequestURI();
+        }
+        return "";
     }
 }

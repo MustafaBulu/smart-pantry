@@ -2,6 +2,7 @@ package com.mustafabulu.smartpantry.service;
 
 import com.mustafabulu.smartpantry.core.exception.SPException;
 import com.mustafabulu.smartpantry.core.response.ResponseMessages;
+import com.mustafabulu.smartpantry.core.util.NameFormatter;
 import com.mustafabulu.smartpantry.dto.response.ProductDetailResponse;
 import com.mustafabulu.smartpantry.dto.request.ProductUpdateRequest;
 import com.mustafabulu.smartpantry.model.Category;
@@ -58,7 +59,7 @@ public class ProductService {
                         ResponseMessages.PRODUCT_UPDATE_EMPTY_CODE
                 );
             }
-            product.setName(trimmedName);
+            product.setName(NameFormatter.capitalizeFirstLetter(trimmedName));
             updated = true;
         }
         if (request.brand() != null) {
@@ -84,7 +85,7 @@ public class ProductService {
                         ResponseMessages.CATEGORY_NAME_REQUIRED_CODE
                 );
             }
-            Category category = categoryRepository.findByName(trimmedCategory)
+            Category category = categoryRepository.findByNameIgnoreCase(trimmedCategory)
                     .orElseThrow(() -> new SPException(
                             HttpStatus.NOT_FOUND,
                             ResponseMessages.CATEGORY_NOT_FOUND,
@@ -132,4 +133,3 @@ public class ProductService {
         );
     }
 }
-

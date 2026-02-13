@@ -60,7 +60,7 @@ class ProductServiceTest {
         product.setName("Old");
         when(productRepository.findById(5L)).thenReturn(Optional.of(product));
         when(productRepository.save(product)).thenReturn(product);
-        when(categoryRepository.findByName("Snacks")).thenReturn(Optional.of(category));
+        when(categoryRepository.findByNameIgnoreCase("Snacks")).thenReturn(Optional.of(category));
 
         ProductUpdateRequest request = new ProductUpdateRequest("New", "Brand", "g", 100, "Snacks");
         ProductDetailResponse response = productService.updateProduct(5L, request);
@@ -82,7 +82,7 @@ class ProductServiceTest {
         product.setCategory(category);
         when(productRepository.findById(5L)).thenReturn(Optional.of(product));
         if (missingCategory != null) {
-            when(categoryRepository.findByName(missingCategory)).thenReturn(Optional.empty());
+            when(categoryRepository.findByNameIgnoreCase(missingCategory)).thenReturn(Optional.empty());
         }
 
         assertThrows(SPException.class, () -> productService.updateProduct(5L, request));

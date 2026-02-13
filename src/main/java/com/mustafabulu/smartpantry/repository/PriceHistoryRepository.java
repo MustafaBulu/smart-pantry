@@ -18,7 +18,7 @@ public interface PriceHistoryRepository extends JpaRepository<PriceHistory, Long
             select distinct ph.product
             from PriceHistory ph
             where ph.marketplace = :marketplace
-              and ph.product.category.name = :categoryName
+              and lower(ph.product.category.name) = lower(:categoryName)
             """)
     List<Product> findDistinctProductsByMarketplaceAndCategory(
             @Param("marketplace") Marketplace marketplace,
@@ -37,7 +37,7 @@ public interface PriceHistoryRepository extends JpaRepository<PriceHistory, Long
     @Query("""
             select distinct ph.product
             from PriceHistory ph
-            where ph.product.category.name = :categoryName
+            where lower(ph.product.category.name) = lower(:categoryName)
             """)
     List<Product> findDistinctProductsByCategory(
             @Param("categoryName") String categoryName
@@ -68,7 +68,7 @@ public interface PriceHistoryRepository extends JpaRepository<PriceHistory, Long
     @Query("""
             select ph
             from PriceHistory ph
-            where ph.product.category.name = :categoryName
+            where lower(ph.product.category.name) = lower(:categoryName)
               and ph.marketplace = coalesce(:marketplace, ph.marketplace)
               and ph.recordedAt >= coalesce(:startDate, ph.recordedAt)
               and ph.recordedAt <= coalesce(:endDate, ph.recordedAt)
@@ -100,4 +100,26 @@ public interface PriceHistoryRepository extends JpaRepository<PriceHistory, Long
             where ph.marketplaceProduct.id = :marketplaceProductId
             """)
     void deleteByMarketplaceProductId(@Param("marketplaceProductId") Long marketplaceProductId);
+
+    @Query("""
+            select ph
+            from PriceHistory ph
+            where ph.marketplaceProduct.id in :marketplaceProductIds
+            order by ph.recordedAt desc
+            """)
+    List<PriceHistory> findByMarketplaceProductIds(
+            @Param("marketplaceProductIds") List<Long> marketplaceProductIds
+    );
+
+    @Query("""
+            select ph
+            from PriceHistory ph
+            where ph.marketplace = :marketplace
+              and ph.product.id in :productIds
+            order by ph.product.id, ph.recordedAt desc
+            """)
+    List<PriceHistory> findLatestByMarketplaceAndProductIds(
+            @Param("marketplace") Marketplace marketplace,
+            @Param("productIds") List<Long> productIds
+    );
 }

@@ -53,12 +53,12 @@ class YemeksepetiProductDetailsServiceTest {
     void recordDailyDetailsSkipsBlankCategory() {
         service.recordDailyDetails(" ");
 
-        verify(categoryRepository, never()).findByName(any());
+        verify(categoryRepository, never()).findByNameIgnoreCase(any());
     }
 
     @Test
     void recordDailyDetailsCreatesCategoryWhenMissing() {
-        when(categoryRepository.findByName("Snacks")).thenReturn(Optional.empty());
+        when(categoryRepository.findByNameIgnoreCase("Snacks")).thenReturn(Optional.empty());
         when(categoryRepository.save(any(Category.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(marketplaceProductRepository.findByMarketplaceAndCategory(any(), any())).thenReturn(List.of());
 
@@ -107,7 +107,7 @@ class YemeksepetiProductDetailsServiceTest {
                 .thenReturn(false);
         when(scraperService.fetchProductDetails("https://example"))
                 .thenReturn(new YemeksepetiProductDetails("Chips", 10, 0, 1, "", "", 1, "g", 100));
-        when(productRepository.findByNameAndCategory("Chips", category)).thenReturn(Optional.empty());
+        when(productRepository.findByNameIgnoreCaseAndCategory("Chips", category)).thenReturn(Optional.empty());
         when(productRepository.save(any(Product.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         boolean result = service.recordDetailsForProduct(category, marketplaceProduct);

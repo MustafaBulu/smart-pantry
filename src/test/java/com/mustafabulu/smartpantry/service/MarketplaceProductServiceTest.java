@@ -60,7 +60,7 @@ class MarketplaceProductServiceTest {
 
     @Test
     void addProductReturnsNotFoundWhenCategoryMissing() {
-        when(categoryRepository.findByName("Snacks")).thenReturn(Optional.empty());
+        when(categoryRepository.findByNameIgnoreCase("Snacks")).thenReturn(Optional.empty());
 
         MarketplaceProductService.AddProductResult result = service.addProduct("YS", "Snacks", "1");
 
@@ -72,7 +72,7 @@ class MarketplaceProductServiceTest {
         Category category = new Category();
         category.setName("Snacks");
         MarketplaceProduct existing = new MarketplaceProduct();
-        when(categoryRepository.findByName("Snacks")).thenReturn(Optional.of(category));
+        when(categoryRepository.findByNameIgnoreCase("Snacks")).thenReturn(Optional.of(category));
         when(marketplaceProductRepository.findByMarketplaceAndCategoryAndExternalId(Marketplace.YS, category, "1"))
                 .thenReturn(Optional.of(existing));
         when(yemeksepetiProductDetailsService.recordDetailsForProduct(category, existing)).thenReturn(true);
@@ -88,7 +88,7 @@ class MarketplaceProductServiceTest {
         Category category = new Category();
         category.setName("Snacks");
         MarketplaceProduct existing = new MarketplaceProduct();
-        when(categoryRepository.findByName("Snacks")).thenReturn(Optional.of(category));
+        when(categoryRepository.findByNameIgnoreCase("Snacks")).thenReturn(Optional.of(category));
         when(marketplaceProductRepository.findByMarketplaceAndCategoryAndExternalId(Marketplace.MG, category, "1"))
                 .thenReturn(Optional.of(existing));
         when(migrosProductDetailsService.recordDetailsForProduct(category, existing)).thenReturn(false);
@@ -103,7 +103,7 @@ class MarketplaceProductServiceTest {
     void addProductDeletesNewEntityOnNotFoundException() {
         Category category = new Category();
         category.setName("Snacks");
-        when(categoryRepository.findByName("Snacks")).thenReturn(Optional.of(category));
+        when(categoryRepository.findByNameIgnoreCase("Snacks")).thenReturn(Optional.of(category));
         when(marketplaceProductRepository.findByMarketplaceAndCategoryAndExternalId(Marketplace.YS, category, "1"))
                 .thenReturn(Optional.empty());
         when(marketplaceUrlProperties.getYemeksepetiBase()).thenReturn("https://example/");
@@ -129,7 +129,7 @@ class MarketplaceProductServiceTest {
     void refreshProductReturnsNotFoundWhenCategoryMissing() {
         when(marketplaceProductRepository.findByMarketplaceAndExternalId(Marketplace.YS, "1"))
                 .thenReturn(List.of(new MarketplaceProduct()));
-        when(categoryRepository.findByName("Snacks")).thenReturn(Optional.empty());
+        when(categoryRepository.findByNameIgnoreCase("Snacks")).thenReturn(Optional.empty());
 
         MarketplaceProductService.RefreshProductResult result = service.refreshProduct("YS", "1", "Snacks");
 
@@ -208,7 +208,7 @@ class MarketplaceProductServiceTest {
     void deleteMarketplaceProductReturnsNotFoundWhenCategoryMissing() {
         when(marketplaceProductRepository.findByMarketplaceAndExternalId(Marketplace.YS, "1"))
                 .thenReturn(List.of(new MarketplaceProduct()));
-        when(categoryRepository.findByName("Snacks")).thenReturn(Optional.empty());
+        when(categoryRepository.findByNameIgnoreCase("Snacks")).thenReturn(Optional.empty());
 
         MarketplaceProductService.DeleteMarketplaceProductResult result = service.deleteMarketplaceProduct("YS", "1", "Snacks");
 
@@ -225,7 +225,7 @@ class MarketplaceProductServiceTest {
         product.setCategory(other);
         when(marketplaceProductRepository.findByMarketplaceAndExternalId(Marketplace.YS, "1"))
                 .thenReturn(List.of(product));
-        when(categoryRepository.findByName("Snacks")).thenReturn(Optional.of(category));
+        when(categoryRepository.findByNameIgnoreCase("Snacks")).thenReturn(Optional.of(category));
 
         MarketplaceProductService.DeleteMarketplaceProductResult result = service.deleteMarketplaceProduct("YS", "1", "Snacks");
 
@@ -234,7 +234,7 @@ class MarketplaceProductServiceTest {
 
     @Test
     void addProductsBulkCountsFailuresForBlankIds() {
-        when(categoryRepository.findByName("Snacks")).thenReturn(Optional.empty());
+        when(categoryRepository.findByNameIgnoreCase("Snacks")).thenReturn(Optional.empty());
 
         var response = service.addProducts("YS", "Snacks", List.of(" ", "1"));
 

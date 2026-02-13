@@ -17,6 +17,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -37,22 +38,19 @@ class CategoryServiceTest {
     private CategoryService categoryService;
 
     @Test
-    void createCategoryReturnsExistingWhenFound() {
+    void createCategoryThrowsWhenAlreadyExists() {
         Category category = new Category();
         category.setId(10L);
         category.setName("Snacks");
-        when(categoryRepository.findByName("Snacks")).thenReturn(Optional.of(category));
+        when(categoryRepository.findByNameIgnoreCase("Snacks")).thenReturn(Optional.of(category));
 
-        CategoryResponse response = categoryService.createCategory("Snacks");
-
-        assertEquals(10L, response.id());
-        assertEquals("Snacks", response.name());
-        verify(categoryRepository, never()).save(category);
+        assertThrows(SPException.class, () -> categoryService.createCategory("Snacks"));
+        verify(categoryRepository, never()).save(any(Category.class));
     }
 
     @Test
     void createCategoryCreatesWhenMissing() {
-        when(categoryRepository.findByName("Snacks")).thenReturn(Optional.empty());
+        when(categoryRepository.findByNameIgnoreCase("Snacks")).thenReturn(Optional.empty());
         when(categoryRepository.save(org.mockito.Mockito.any(Category.class)))
                 .thenAnswer(invocation -> {
                     Category saved = invocation.getArgument(0);
@@ -98,8 +96,11 @@ class CategoryServiceTest {
         Category category = new Category();
         category.setId(1L);
         category.setName("Old");
+        Category duplicate = new Category();
+        duplicate.setId(2L);
+        duplicate.setName("New");
         when(categoryRepository.findById(1L)).thenReturn(Optional.of(category));
-        when(categoryRepository.existsByName("New")).thenReturn(true);
+        when(categoryRepository.findByNameIgnoreCase("New")).thenReturn(Optional.of(duplicate));
 
         assertThrows(SPException.class, () -> categoryService.updateCategory(1L, "New"));
     }
@@ -110,7 +111,7 @@ class CategoryServiceTest {
         category.setId(1L);
         category.setName("Old");
         when(categoryRepository.findById(1L)).thenReturn(Optional.of(category));
-        when(categoryRepository.existsByName("New")).thenReturn(false);
+        when(categoryRepository.findByNameIgnoreCase("New")).thenReturn(Optional.empty());
         when(categoryRepository.save(category)).thenReturn(category);
 
         CategoryResponse response = categoryService.updateCategory(1L, "New");

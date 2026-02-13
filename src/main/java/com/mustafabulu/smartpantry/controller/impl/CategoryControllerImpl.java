@@ -4,6 +4,8 @@ import com.mustafabulu.smartpantry.controller.CategoryController;
 import com.mustafabulu.smartpantry.core.response.ResponseMessages;
 import com.mustafabulu.smartpantry.dto.request.CategoryRequest;
 import com.mustafabulu.smartpantry.dto.response.CategoryResponse;
+import com.mustafabulu.smartpantry.dto.response.MarketplaceProductCandidateResponse;
+import com.mustafabulu.smartpantry.dto.response.MarketplaceProductEntryResponse;
 import com.mustafabulu.smartpantry.service.CategoryService;
 import jakarta.validation.Valid;
 import lombok.AllArgsConstructor;
@@ -15,6 +17,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -52,6 +55,21 @@ public class CategoryControllerImpl implements CategoryController {
     public ResponseEntity<String> deleteCategory(@PathVariable Long id) {
         categoryService.deleteCategory(id);
         return ResponseEntity.ok(ResponseMessages.CATEGORY_REMOVED);
+    }
+
+    @GetMapping("/{id}/marketplace-products")
+    @Override
+    public ResponseEntity<List<MarketplaceProductCandidateResponse>> listMarketplaceCandidates(@PathVariable Long id) {
+        return ResponseEntity.ok(categoryService.listMarketplaceCandidates(id));
+    }
+
+    @GetMapping("/{id}/marketplace-products/added")
+    @Override
+    public ResponseEntity<List<MarketplaceProductEntryResponse>> listMarketplaceProducts(
+            @PathVariable Long id,
+            @RequestParam(required = false) String marketplaceCode
+    ) {
+        return ResponseEntity.ok(categoryService.listMarketplaceAddedProducts(id, marketplaceCode));
     }
 }
 

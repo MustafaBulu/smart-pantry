@@ -11,6 +11,8 @@ import java.util.Optional;
 public interface MarketplaceProductRepository extends JpaRepository<MarketplaceProduct, Long> {
     List<MarketplaceProduct> findByMarketplaceAndCategory(Marketplace marketplace, Category category);
 
+    List<MarketplaceProduct> findByCategory(Category category);
+
     List<MarketplaceProduct> findByMarketplaceAndExternalId(Marketplace marketplace, String externalId);
 
     boolean existsByCategory(Category category);
