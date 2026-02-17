@@ -99,6 +99,22 @@ export default function HistoryPage() {
             <option value="YS">YS - Yemeksepeti</option>
             <option value="MG">MG - Migros</option>
           </select>
+          <span className="flex items-center gap-2 rounded-full border border-black/10 bg-white px-3 py-1">
+            <img
+              src="/yemeksepeti-logo.png"
+              alt="Yemeksepeti"
+              className="h-4 w-4 rounded-sm object-contain"
+            />
+            Yemeksepeti
+          </span>
+          <span className="flex items-center gap-2 rounded-full border border-black/10 bg-white px-3 py-1">
+            <img
+              src="/migros-logo.png"
+              alt="Migros"
+              className="h-4 w-4 rounded-sm object-contain"
+            />
+            Migros
+          </span>
         </div>
       </section>
 
@@ -134,7 +150,29 @@ export default function HistoryPage() {
                   className="rounded-2xl border border-black/5 bg-[#f9f4ee] px-3 py-2"
                 >
                   <div className="flex items-center justify-between text-xs text-[#6b655c]">
-                    <span>{item.marketplaceCode}</span>
+                    <span className="flex items-center gap-2">
+                      {item.marketplaceCode === "YS" && (
+                        <img
+                          src="/yemeksepeti-logo.png"
+                          alt="Yemeksepeti"
+                          className="h-4 w-4 rounded-sm object-contain"
+                        />
+                      )}
+                      {item.marketplaceCode === "MG" && (
+                        <img
+                          src="/migros-logo.png"
+                          alt="Migros"
+                          className="h-4 w-4 rounded-sm object-contain"
+                        />
+                      )}
+                      <span>
+                        {item.marketplaceCode === "YS"
+                          ? "Yemeksepeti"
+                          : item.marketplaceCode === "MG"
+                            ? "Migros"
+                            : item.marketplaceCode}
+                      </span>
+                    </span>
                     <span>{item.recordedAt}</span>
                   </div>
                   <div className="mt-1 text-sm font-semibold text-[#111]">

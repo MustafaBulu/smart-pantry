@@ -6,6 +6,7 @@ import com.mustafabulu.smartpantry.model.MarketplaceProduct;
 import com.mustafabulu.smartpantry.model.Product;
 import com.mustafabulu.smartpantry.config.MarketplaceUrlProperties;
 import com.mustafabulu.smartpantry.repository.CategoryRepository;
+import com.mustafabulu.smartpantry.repository.MigrosPriceHistoryCampaignRepository;
 import com.mustafabulu.smartpantry.repository.MarketplaceProductRepository;
 import com.mustafabulu.smartpantry.repository.PriceHistoryRepository;
 import com.mustafabulu.smartpantry.repository.ProductRepository;
@@ -44,6 +45,9 @@ class MigrosProductDetailsServiceTest {
     private PriceHistoryRepository priceHistoryRepository;
 
     @Mock
+    private MigrosPriceHistoryCampaignRepository migrosPriceHistoryCampaignRepository;
+
+    @Mock
     private MarketplaceUrlProperties marketplaceUrlProperties;
 
     private MigrosProductDetailsService service;
@@ -56,6 +60,7 @@ class MigrosProductDetailsServiceTest {
                 marketplaceProductRepository,
                 productRepository,
                 priceHistoryRepository,
+                migrosPriceHistoryCampaignRepository,
                 marketplaceUrlProperties
         );
     }
@@ -105,7 +110,19 @@ class MigrosProductDetailsServiceTest {
         when(priceHistoryRepository.existsByMarketplaceProductAndRecordedAtBetween(any(), any(), any()))
                 .thenReturn(false);
         when(scraperService.fetchProductDetails("https://example"))
-                .thenReturn(new MigrosProductDetails("Chips", 12.5, "g", 150, "Brand"));
+                .thenReturn(new MigrosProductDetails(
+                        "Chips",
+                        12.5,
+                        "g",
+                        150,
+                        "Brand",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null
+                ));
         when(productRepository.findByNameIgnoreCaseAndCategory("Chips", category)).thenReturn(Optional.empty());
         when(productRepository.save(any(Product.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));

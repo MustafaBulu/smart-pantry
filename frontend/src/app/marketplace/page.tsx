@@ -17,9 +17,9 @@ type MarketplaceState = {
     notices: Notice[];
 };
 
-const MARKETPLACES: { code: MarketplaceCode; name: string }[] = [
-    {code: "YS", name: "Yemeksepeti"},
-    {code: "MG", name: "Migros"},
+const MARKETPLACES: { code: MarketplaceCode; name: string; iconSrc: string }[] = [
+    {code: "YS", name: "Yemeksepeti", iconSrc: "/yemeksepeti-logo.png"},
+    {code: "MG", name: "Migros", iconSrc: "/migros-logo.png"},
 ];
 
 const splitIds = (value: string) =>
@@ -235,7 +235,14 @@ export default function MarketplacePage() {
                             type="button"
                             onClick={() => setMarketplaceCode(market.code)}
                         >
-                            {market.name}
+                            <span className="flex items-center gap-2">
+                                <img
+                                    src={market.iconSrc}
+                                    alt={market.name}
+                                    className="h-4 w-4 rounded-sm object-contain"
+                                />
+                                <span>{market.name}</span>
+                            </span>
                         </button>
                     ))}
                 </div>

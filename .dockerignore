@@ -1,0 +1,9 @@
+.git
+.idea
+target
+frontend/.next
+frontend/node_modules
+node_modules
+*.iml
+*.log
+.DS_Store

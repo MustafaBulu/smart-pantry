@@ -5,10 +5,12 @@ import com.mustafabulu.smartpantry.core.exception.SPException;
 import com.mustafabulu.smartpantry.migros.model.MigrosProductDetails;
 import com.mustafabulu.smartpantry.model.Category;
 import com.mustafabulu.smartpantry.enums.Marketplace;
+import com.mustafabulu.smartpantry.model.MigrosPriceHistoryCampaign;
 import com.mustafabulu.smartpantry.model.MarketplaceProduct;
 import com.mustafabulu.smartpantry.model.PriceHistory;
 import com.mustafabulu.smartpantry.model.Product;
 import com.mustafabulu.smartpantry.repository.CategoryRepository;
+import com.mustafabulu.smartpantry.repository.MigrosPriceHistoryCampaignRepository;
 import com.mustafabulu.smartpantry.repository.MarketplaceProductRepository;
 import com.mustafabulu.smartpantry.repository.PriceHistoryRepository;
 import com.mustafabulu.smartpantry.repository.ProductRepository;
@@ -39,6 +41,7 @@ public class MigrosProductDetailsService implements PlatformProductDetailsServic
     private final MarketplaceProductRepository marketplaceProductRepository;
     private final ProductRepository productRepository;
     private final PriceHistoryRepository priceHistoryRepository;
+    private final MigrosPriceHistoryCampaignRepository migrosPriceHistoryCampaignRepository;
     private final MarketplaceUrlProperties marketplaceUrlProperties;
 
     @Override
@@ -91,10 +94,12 @@ public class MigrosProductDetailsService implements PlatformProductDetailsServic
         if (details == null) {
             return false;
         }
+        updateMarketplacePricingMetadata(marketplaceProduct, details);
 
         Product product = findOrCreateProduct(category, marketplaceProduct, details);
         updateProductIfMissing(product, details);
         PriceHistory history = saveHistory(product, marketplaceProduct, details);
+        saveCampaignHistory(product, marketplaceProduct, details, history);
         logHistory(category, product, marketplaceProduct, history);
         return true;
     }
@@ -195,6 +200,66 @@ public class MigrosProductDetailsService implements PlatformProductDetailsServic
         history.setPrice(BigDecimal.valueOf(details.currentPrice()));
         priceHistoryRepository.save(history);
         return history;
+    }
+
+    private void updateMarketplacePricingMetadata(
+            MarketplaceProduct marketplaceProduct,
+            MigrosProductDetails details
+    ) {
+        boolean updated = false;
+        if (details.basketDiscountThreshold() != null
+                && !details.basketDiscountThreshold().equals(marketplaceProduct.getBasketDiscountThreshold())) {
+            marketplaceProduct.setBasketDiscountThreshold(details.basketDiscountThreshold());
+            updated = true;
+        }
+        if (details.basketDiscountPrice() != null
+                && !details.basketDiscountPrice().equals(marketplaceProduct.getBasketDiscountPrice())) {
+            marketplaceProduct.setBasketDiscountPrice(details.basketDiscountPrice());
+            updated = true;
+        }
+        if (details.campaignBuyQuantity() != null
+                && !details.campaignBuyQuantity().equals(marketplaceProduct.getCampaignBuyQuantity())) {
+            marketplaceProduct.setCampaignBuyQuantity(details.campaignBuyQuantity());
+            updated = true;
+        }
+        if (details.campaignPayQuantity() != null
+                && !details.campaignPayQuantity().equals(marketplaceProduct.getCampaignPayQuantity())) {
+            marketplaceProduct.setCampaignPayQuantity(details.campaignPayQuantity());
+            updated = true;
+        }
+        if (details.effectivePrice() != null
+                && !details.effectivePrice().equals(marketplaceProduct.getEffectivePrice())) {
+            marketplaceProduct.setEffectivePrice(details.effectivePrice());
+            updated = true;
+        }
+        if (updated) {
+            marketplaceProductRepository.save(marketplaceProduct);
+        }
+    }
+
+    private void saveCampaignHistory(
+            Product product,
+            MarketplaceProduct marketplaceProduct,
+            MigrosProductDetails details,
+            PriceHistory history
+    ) {
+        if (history == null || history.getRecordedAt() == null) {
+            return;
+        }
+        java.time.LocalDate recordedDate = history.getRecordedAt().toLocalDate();
+        MigrosPriceHistoryCampaign campaign = migrosPriceHistoryCampaignRepository
+                .findByMarketplaceProductIdAndRecordedDate(marketplaceProduct.getId(), recordedDate)
+                .orElseGet(MigrosPriceHistoryCampaign::new);
+        campaign.setMarketplaceProductId(marketplaceProduct.getId());
+        campaign.setProductId(product.getId());
+        campaign.setRecordedDate(recordedDate);
+        campaign.setCampaignBuyQuantity(details.campaignBuyQuantity());
+        campaign.setCampaignPayQuantity(details.campaignPayQuantity());
+        campaign.setMoneyPrice(details.moneyPrice() != null ? details.moneyPrice() : marketplaceProduct.getMoneyPrice());
+        campaign.setEffectivePrice(
+                details.effectivePrice() != null ? details.effectivePrice() : marketplaceProduct.getEffectivePrice()
+        );
+        migrosPriceHistoryCampaignRepository.save(campaign);
     }
 
     private void logHistory(

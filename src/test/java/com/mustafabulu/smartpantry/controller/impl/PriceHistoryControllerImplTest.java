@@ -20,10 +20,10 @@ class PriceHistoryControllerImplTest {
     void getProductPricesReturnsList() {
         PriceHistoryService service = mock(PriceHistoryService.class);
         PriceHistoryControllerImpl controller = new PriceHistoryControllerImpl(service);
-        when(service.getProductPrices(1L, "YS", null, null))
-                .thenReturn(List.of(new PriceHistoryResponse(1L, 1L, "Chips", "YS", BigDecimal.ONE, LocalDate.now())));
+        when(service.getProductPrices(1L, "YS", null, null, false, false))
+                .thenReturn(List.of(new PriceHistoryResponse(1L, 1L, "Chips", "YS", BigDecimal.ONE, BigDecimal.valueOf(75.0), "Yuksek", LocalDate.now())));
 
-        var response = controller.getProductPrices(1L, "YS");
+        var response = controller.getProductPrices(1L, "YS", false, false);
 
         assertNotNull(response.getBody());
         assertEquals(1, response.getBody().size());

@@ -17,6 +17,10 @@ public record PriceHistoryResponse(
         String marketplaceCode,
         @Schema(description = "Recorded price", example = "29.90")
         BigDecimal price,
+        @Schema(description = "Price-based availability score (0-100)", example = "78.40")
+        BigDecimal availabilityScore,
+        @Schema(description = "Opportunity level derived from availability score", example = "Yuksek")
+        String opportunityLevel,
         @Schema(description = "Recorded date", example = "2026-02-08")
         LocalDate recordedAt
 ) {

@@ -19,6 +19,8 @@ export type PriceHistoryResponse = {
   productName: string;
   marketplaceCode: string;
   price: number;
+  availabilityScore: number | null;
+  opportunityLevel: string | null;
   recordedAt: string;
 };
 
@@ -49,18 +51,32 @@ export type BulkAddResponse = {
 export type MarketplaceProductCandidateResponse = {
   marketplaceCode: string;
   externalId: string;
+  sku: string;
   name: string;
   brandName: string;
   imageUrl: string;
   price: number | null;
+  moneyPrice: number | null;
+  basketDiscountThreshold: number | null;
+  basketDiscountPrice: number | null;
+  campaignBuyQuantity: number | null;
+  campaignPayQuantity: number | null;
+  effectivePrice: number | null;
 };
 
 export type MarketplaceProductEntryResponse = {
   marketplaceCode: string;
   externalId: string;
+  sku: string;
   name: string;
   productId: number | null;
   brandName: string;
   imageUrl: string;
   price: number | null;
+  moneyPrice: number | null;
+  basketDiscountThreshold: number | null;
+  basketDiscountPrice: number | null;
+  campaignBuyQuantity: number | null;
+  campaignPayQuantity: number | null;
+  effectivePrice: number | null;
 };

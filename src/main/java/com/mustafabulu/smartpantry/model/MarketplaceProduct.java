@@ -17,6 +17,8 @@ import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.Setter;
 
+import java.math.BigDecimal;
+
 @Entity
 @Table(name = "marketplace_products")
 @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
@@ -42,4 +44,28 @@ public class MarketplaceProduct {
 
     @Column
     private String productUrl;
+
+    @Column
+    private String brandName;
+
+    @Column(length = 1024)
+    private String imageUrl;
+
+    @Column(precision = 19, scale = 2)
+    private BigDecimal moneyPrice;
+
+    @Column(precision = 19, scale = 2)
+    private BigDecimal basketDiscountThreshold;
+
+    @Column(precision = 19, scale = 2)
+    private BigDecimal basketDiscountPrice;
+
+    @Column
+    private Integer campaignBuyQuantity;
+
+    @Column
+    private Integer campaignPayQuantity;
+
+    @Column(precision = 19, scale = 2)
+    private BigDecimal effectivePrice;
 }

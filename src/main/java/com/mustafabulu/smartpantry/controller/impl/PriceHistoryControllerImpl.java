@@ -31,9 +31,22 @@ public class PriceHistoryControllerImpl implements PriceHistoryController {
             @PathVariable Long id,
             @RequestParam(required = false)
             @Pattern(regexp = "(?i)^(YS|MG)$", message = ResponseMessages.INVALID_MARKETPLACE_CODE)
-            String marketplaceCode
+            String marketplaceCode,
+            @RequestParam(required = false, defaultValue = "false")
+            Boolean useMoneyPrice,
+            @RequestParam(required = false, defaultValue = "false")
+            Boolean useEffectivePrice
     ) {
-        return ResponseEntity.ok(priceHistoryService.getProductPrices(id, marketplaceCode, null, null));
+        return ResponseEntity.ok(
+                priceHistoryService.getProductPrices(
+                        id,
+                        marketplaceCode,
+                        null,
+                        null,
+                        Boolean.TRUE.equals(useMoneyPrice),
+                        Boolean.TRUE.equals(useEffectivePrice)
+                )
+        );
     }
 
     @GetMapping("/categories/{name}/prices")

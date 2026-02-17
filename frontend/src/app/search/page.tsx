@@ -10,7 +10,7 @@ export default function SearchPage() {
   const [marketplaceCode, setMarketplaceCode] = useState<MarketplaceCode>("");
   const [categoryName, setCategoryName] = useState("");
   const [results, setResults] = useState<ProductResponse[]>([]);
-  const [selected, setSelected] = useState<Record<number, boolean>>({});
+  const [activeProductId, setActiveProductId] = useState<number | null>(null);
   const [details, setDetails] = useState<Record<number, ProductDetailResponse>>(
     {}
   );
@@ -35,6 +35,7 @@ export default function SearchPage() {
       const path = `/marketplaces/products${queryString ? `?${queryString}` : ""}`;
       const data = await request<ProductResponse[]>(path);
       setResults(data);
+      setActiveProductId(null);
       setStatusMessage(`${data.length} urun bulundu.`);
     } catch (err) {
       setStatusMessage(`Arama hatasi: ${(err as Error).message}`);
@@ -43,8 +44,8 @@ export default function SearchPage() {
     }
   };
 
-  const handleToggleProduct = async (productId: number) => {
-    setSelected((prev) => ({ ...prev, [productId]: !prev[productId] }));
+  const handleOpenProduct = async (productId: number) => {
+    setActiveProductId(productId);
     if (!details[productId]) {
       try {
         const data = await request<ProductDetailResponse>(`/products/${productId}`);
@@ -54,6 +55,8 @@ export default function SearchPage() {
       }
     }
   };
+
+  const activeDetail = activeProductId !== null ? details[activeProductId] : null;
 
   return (
     <div className="flex flex-col gap-8">
@@ -94,6 +97,24 @@ export default function SearchPage() {
             Ara
           </button>
         </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-[#6b655c]">
+          <span className="flex items-center gap-2 rounded-full border border-black/10 bg-white px-3 py-1">
+            <img
+              src="/yemeksepeti-logo.png"
+              alt="Yemeksepeti"
+              className="h-4 w-4 rounded-sm object-contain"
+            />
+            Yemeksepeti
+          </span>
+          <span className="flex items-center gap-2 rounded-full border border-black/10 bg-white px-3 py-1">
+            <img
+              src="/migros-logo.png"
+              alt="Migros"
+              className="h-4 w-4 rounded-sm object-contain"
+            />
+            Migros
+          </span>
+        </div>
         <div className="mt-4 text-xs text-[#6b655c]">API: {API_BASE}</div>
       </section>
 
@@ -114,14 +135,10 @@ export default function SearchPage() {
               results.map((product) => (
                 <div
                   key={product.id}
-                  className="rounded-2xl border border-black/5 bg-[#f9f4ee] px-3 py-2"
+                  className="rounded-2xl border border-black/5 bg-[#f9f4ee] px-3 py-2 text-sm"
                 >
-                  <button
-                    type="button"
-                    className="flex w-full items-center justify-between text-left text-sm"
-                    onClick={() => handleToggleProduct(product.id)}
-                  >
-                    <span>{product.name}</span>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="min-w-0 flex-1 truncate">{product.name}</span>
                     <div className="flex items-center gap-3 text-xs text-[#6b655c]">
                       <span>
                         {product.price !== null
@@ -129,29 +146,15 @@ export default function SearchPage() {
                           : "-"}
                       </span>
                       <span>#{product.id}</span>
+                      <button
+                        type="button"
+                        className="rounded-lg border border-black/10 bg-white px-2 py-1 text-xs font-semibold text-[#111] transition hover:bg-[#f4ede3]"
+                        onClick={() => handleOpenProduct(product.id)}
+                      >
+                        Detay
+                      </button>
                     </div>
-                  </button>
-                  {selected[product.id] && (
-                    <div className="mt-2 rounded-xl border border-black/5 bg-white px-3 py-2 text-xs text-[#6b655c]">
-                      {details[product.id] ? (
-                        <div className="space-y-1">
-                          <p className="text-sm font-semibold text-[#111]">
-                            {details[product.id].name}
-                          </p>
-                          <p>Marka: {details[product.id].brand ?? "-"}</p>
-                          <p>
-                            Birim: {details[product.id].unitValue ?? "?"}
-                            {details[product.id].unit ?? ""}
-                          </p>
-                          <p>
-                            Kategori: {details[product.id].categoryName ?? "-"}
-                          </p>
-                        </div>
-                      ) : (
-                        <p>Detay yukleniyor...</p>
-                      )}
-                    </div>
-                  )}
+                  </div>
                 </div>
               ))
             )}
@@ -170,6 +173,40 @@ export default function SearchPage() {
           </div>
         </div>
       </section>
+
+      {activeProductId !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-3xl border border-black/10 bg-white p-5 shadow-[0_20px_50px_-35px_rgba(0,0,0,0.5)]">
+            <div className="flex items-center justify-between">
+              <h4 className="display text-xl">Urun Detayi</h4>
+              <button
+                type="button"
+                className="rounded-lg border border-black/10 px-2 py-1 text-xs text-[#6b655c] hover:bg-[#f4ede3]"
+                onClick={() => setActiveProductId(null)}
+              >
+                Kapat
+              </button>
+            </div>
+            <div className="mt-4 rounded-2xl border border-black/5 bg-[#f9f4ee] px-4 py-3 text-sm text-[#6b655c]">
+              {activeDetail ? (
+                <div className="space-y-2">
+                  <p className="text-base font-semibold text-[#111]">
+                    {activeDetail.name}
+                  </p>
+                  <p>Marka: {activeDetail.brand ?? "-"}</p>
+                  <p>
+                    Birim: {activeDetail.unitValue ?? "?"}
+                    {activeDetail.unit ?? ""}
+                  </p>
+                  <p>Kategori: {activeDetail.categoryName ?? "-"}</p>
+                </div>
+              ) : (
+                <p>Detay yukleniyor...</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

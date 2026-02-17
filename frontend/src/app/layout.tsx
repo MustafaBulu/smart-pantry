@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Fraunces, Space_Grotesk } from "next/font/google";
+import { Bebas_Neue, Fraunces, Space_Grotesk } from "next/font/google";
 import "./globals.css";
 import React from "react";
 
@@ -12,6 +12,12 @@ const spaceGrotesk = Space_Grotesk({
 const fraunces = Fraunces({
   variable: "--font-display",
   subsets: ["latin"],
+});
+
+const bebasNeue = Bebas_Neue({
+  variable: "--font-category",
+  subsets: ["latin"],
+  weight: "400",
 });
 
 export const metadata: Metadata = {
@@ -26,10 +32,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="tr">
-      <body className={`${spaceGrotesk.variable} ${fraunces.variable} antialiased`}>
+      <body className={`${spaceGrotesk.variable} ${fraunces.variable} ${bebasNeue.variable} antialiased`}>
         <div className="min-h-screen bg-[radial-gradient(circle_at_top,#fdf7ee,#f7f4ef_55%,#efe7dc_100%)] text-[#101010]">
           <header className="border-b border-black/10 bg-white/70 backdrop-blur">
-            <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-4 px-6 py-4">
+            <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-4 px-6 py-4">
               <div>
                 <p className="text-xs uppercase tracking-[0.3em] text-[#9a5c00]">
                   Smart Pantry Console
@@ -52,7 +58,7 @@ export default function RootLayout({
               </nav>
             </div>
           </header>
-          <main className="mx-auto w-full max-w-6xl px-6 py-10">{children}</main>
+          <main className="mx-auto w-full max-w-7xl px-6 py-10">{children}</main>
         </div>
       </body>
     </html>

@@ -1,5 +1,6 @@
 package com.mustafabulu.smartpantry.service;
 
+import com.mustafabulu.smartpantry.core.util.MarketplacePriceNormalizer;
 import com.mustafabulu.smartpantry.dto.response.ProductResponse;
 import com.mustafabulu.smartpantry.dto.request.ProductSearchRequest;
 import com.mustafabulu.smartpantry.enums.Marketplace;
@@ -73,7 +74,13 @@ public class ProductSearchService {
         Map<Long, BigDecimal> latestPrices = new LinkedHashMap<>();
         for (PriceHistory history : histories) {
             Long productId = history.getProduct().getId();
-            latestPrices.putIfAbsent(productId, history.getPrice());
+            latestPrices.putIfAbsent(
+                    productId,
+                    MarketplacePriceNormalizer.normalizeForDisplay(
+                            history.getMarketplace(),
+                            history.getPrice()
+                    )
+            );
         }
         return latestPrices;
     }

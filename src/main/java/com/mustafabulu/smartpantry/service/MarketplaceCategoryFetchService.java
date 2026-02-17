@@ -16,7 +16,13 @@ public interface MarketplaceCategoryFetchService {
             String name,
             String brandName,
             String imageUrl,
-            java.math.BigDecimal price
+            java.math.BigDecimal price,
+            java.math.BigDecimal moneyPrice,
+            java.math.BigDecimal basketDiscountThreshold,
+            java.math.BigDecimal basketDiscountPrice,
+            Integer campaignBuyQuantity,
+            Integer campaignPayQuantity,
+            java.math.BigDecimal effectivePrice
     ) {
     }
 }

@@ -40,6 +40,7 @@ public class YemeksepetiCategoryFetchService implements MarketplaceCategoryFetch
                 name
                 price
                 productID
+                urls
             }
             
             query getSearchProducts(
@@ -87,6 +88,7 @@ public class YemeksepetiCategoryFetchService implements MarketplaceCategoryFetch
 
     @Override
     public List<MarketplaceProductCandidate> fetchByCategory(String categoryName) {
+        long startedAt = System.nanoTime();
         if (categoryName == null || categoryName.isBlank()) {
             return List.of();
         }
@@ -110,7 +112,15 @@ public class YemeksepetiCategoryFetchService implements MarketplaceCategoryFetch
             }
             Map<String, MarketplaceProductCandidate> candidates = new LinkedHashMap<>();
             collectCandidates(candidates, searchProducts.path("products").path("items"));
-            return new ArrayList<>(candidates.values());
+            List<MarketplaceProductCandidate> result = new ArrayList<>(candidates.values());
+            long durationMs = (System.nanoTime() - startedAt) / 1_000_000;
+            log.info(
+                    "yemeksepeti candidate fetch timing: categoryName={}, count={}, durationMs={}",
+                    categoryName,
+                    result.size(),
+                    durationMs
+            );
+            return result;
         } catch (IOException ex) {
             log.warn("Yemeksepeti search response parse failed.", ex);
             return List.of();
@@ -195,16 +205,30 @@ public class YemeksepetiCategoryFetchService implements MarketplaceCategoryFetch
             }
             String name = payload.path("name").asText("");
             BigDecimal price = resolvePrice(payload.path("price"));
+            String imageUrl = resolveImageUrl(payload.path("urls"));
             MarketplaceProductCandidate candidate = new MarketplaceProductCandidate(
                     Marketplace.YS,
                     externalId,
                     name,
                     "",
-                    "",
-                    price
+                    imageUrl,
+                    price,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null
             );
             candidates.putIfAbsent(externalId, candidate);
         }
+    }
+
+    private String resolveImageUrl(JsonNode urlsNode) {
+        if (urlsNode == null || !urlsNode.isArray() || urlsNode.isEmpty()) {
+            return "";
+        }
+        return urlsNode.get(0).asText("");
     }
 
     private BigDecimal resolvePrice(JsonNode priceNode) {

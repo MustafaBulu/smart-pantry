@@ -25,7 +25,11 @@ public interface PriceHistoryController {
     ResponseEntity<List<PriceHistoryResponse>> getProductPrices(
             Long id,
             @Parameter(description = "Marketplace code filter", example = "YS")
-            String marketplaceCode
+            String marketplaceCode,
+            @Parameter(description = "Use Migros Money price if available", example = "true")
+            Boolean useMoneyPrice,
+            @Parameter(description = "Use effective campaign price if available", example = "true")
+            Boolean useEffectivePrice
     );
 
     @Operation(summary = "Get category price summary", description = "Defaults to the last 1 year.")

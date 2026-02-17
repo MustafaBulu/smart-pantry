@@ -53,6 +53,30 @@ src/main/resources
 4. Run the app:
    - `./mvnw spring-boot:run`
 
+## Docker Setup
+Run all services (PostgreSQL + backend + frontend):
+
+```bash
+docker compose up --build
+```
+
+Services:
+- Frontend: `http://localhost:3000`
+- Backend API: `http://localhost:8081`
+- PostgreSQL: `localhost:5432`
+
+Stop services:
+
+```bash
+docker compose down
+```
+
+Stop services and remove DB volume:
+
+```bash
+docker compose down -v
+```
+
 ## Usage
 Base URL: `http://localhost:8080`
 
