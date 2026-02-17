@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 type NeedItem = {
   key: string;
@@ -25,17 +25,19 @@ const urgencyLabel = (urgency: NeedItem["urgency"]) => {
 };
 
 export default function NeedsPage() {
-  const [items, setItems] = useState<NeedItem[]>([]);
-
-  useEffect(() => {
+  const initialItems = (() => {
+    if (typeof window === "undefined") {
+      return [] as NeedItem[];
+    }
     try {
       const raw = window.localStorage.getItem(NEED_LIST_STORAGE_KEY);
       const parsed = raw ? (JSON.parse(raw) as NeedItem[]) : [];
-      setItems(Array.isArray(parsed) ? parsed : []);
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
-      setItems([]);
+      return [] as NeedItem[];
     }
-  }, []);
+  })();
+  const [items] = useState<NeedItem[]>(initialItems);
 
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-8">

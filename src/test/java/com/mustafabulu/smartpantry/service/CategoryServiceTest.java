@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.never;
@@ -120,15 +121,14 @@ class CategoryServiceTest {
     }
 
     @Test
-    void deleteCategoryThrowsWhenInUse() {
+    void deleteCategoryDeletesWhenInUse() {
         Category category = new Category();
         category.setId(1L);
         category.setName("Snacks");
         when(categoryRepository.findById(1L)).thenReturn(Optional.of(category));
-        when(productRepository.existsByCategory(category)).thenReturn(true);
 
-        assertThrows(SPException.class, () -> categoryService.deleteCategory(1L));
-        verify(categoryRepository, never()).delete(category);
+        assertDoesNotThrow(() -> categoryService.deleteCategory(1L));
+        verify(categoryRepository).delete(category);
     }
 
     @Test
@@ -144,8 +144,6 @@ class CategoryServiceTest {
         category.setId(1L);
         category.setName("Snacks");
         when(categoryRepository.findById(1L)).thenReturn(Optional.of(category));
-        when(productRepository.existsByCategory(category)).thenReturn(false);
-        when(marketplaceProductRepository.existsByCategory(category)).thenReturn(false);
 
         categoryService.deleteCategory(1L);
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 type NeedItem = {
   key: string;
@@ -69,12 +69,15 @@ const urgencyLabel = (urgency: NeedItem["urgency"]) => {
 };
 
 export default function BasketPage() {
-  const [needList, setNeedList] = useState<NeedItem[]>([]);
-  const [opportunities, setOpportunities] = useState<OpportunityItem[]>([]);
-  const [minimumBasketAmount, setMinimumBasketAmount] = useState<number | null>(null);
-  const [considerEffectivePricing, setConsiderEffectivePricing] = useState(false);
-
-  useEffect(() => {
+  const initialState = (() => {
+    if (typeof window === "undefined") {
+      return {
+        needList: [] as NeedItem[],
+        opportunities: [] as OpportunityItem[],
+        minimumBasketAmount: null as number | null,
+        considerEffectivePricing: false,
+      };
+    }
     try {
       const needsRaw = window.localStorage.getItem(NEED_LIST_STORAGE_KEY);
       const oppRaw = window.localStorage.getItem(OPPORTUNITY_FEED_STORAGE_KEY);
@@ -84,19 +87,26 @@ export default function BasketPage() {
       const settings = settingsRaw
         ? (JSON.parse(settingsRaw) as { minimumBasketAmount?: number; considerEffectivePricing?: boolean })
         : {};
-      setNeedList(Array.isArray(needs) ? needs : []);
-      setOpportunities(Array.isArray(opp) ? opp : []);
-      setMinimumBasketAmount(
-        typeof settings.minimumBasketAmount === "number" ? settings.minimumBasketAmount : null
-      );
-      setConsiderEffectivePricing(Boolean(settings.considerEffectivePricing));
+      return {
+        needList: Array.isArray(needs) ? needs : [],
+        opportunities: Array.isArray(opp) ? opp : [],
+        minimumBasketAmount:
+          typeof settings.minimumBasketAmount === "number" ? settings.minimumBasketAmount : null,
+        considerEffectivePricing: Boolean(settings.considerEffectivePricing),
+      };
     } catch {
-      setNeedList([]);
-      setOpportunities([]);
-      setMinimumBasketAmount(null);
-      setConsiderEffectivePricing(false);
+      return {
+        needList: [] as NeedItem[],
+        opportunities: [] as OpportunityItem[],
+        minimumBasketAmount: null as number | null,
+        considerEffectivePricing: false,
+      };
     }
-  }, []);
+  })();
+  const [needList] = useState<NeedItem[]>(initialState.needList);
+  const [opportunities] = useState<OpportunityItem[]>(initialState.opportunities);
+  const [minimumBasketAmount] = useState<number | null>(initialState.minimumBasketAmount);
+  const [considerEffectivePricing] = useState(initialState.considerEffectivePricing);
 
   const suggestedFromNeeds = useMemo(() => {
     const defaultThreshold = minimumBasketAmount ?? DEFAULT_MIGROS_BASKET_THRESHOLD;

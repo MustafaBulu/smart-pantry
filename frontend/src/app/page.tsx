@@ -2872,7 +2872,7 @@ export default function HomePage() {
           </div>
         </div>
         <p className="mt-3 text-xs text-[#6b655c]">
-          Efektif fiyat acik oldugunda "2 Ode 1'i Money Hediye" kampanyalari karar
+          Efektif fiyat acik oldugunda &quot;2 Ode 1&apos;i Money Hediye&quot; kampanyalari karar
           hesabina dahil edilir.
         </p>
       </section>
