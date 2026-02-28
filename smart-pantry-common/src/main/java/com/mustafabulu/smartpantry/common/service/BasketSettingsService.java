@@ -20,8 +20,15 @@ import java.util.regex.Pattern;
 @Service
 public class BasketSettingsService {
 
-    private static final Pattern DECIMAL_PATTERN = Pattern.compile("([0-9][0-9.,]*)");
+    private static final Pattern DECIMAL_PATTERN = Pattern.compile("(\\d[\\d.,]*)");
     private static final Logger log = LoggerFactory.getLogger(BasketSettingsService.class);
+    private static final String HEADER_ACCEPT = "Accept";
+    private static final String HEADER_REFERER = "Referer";
+    private static final String HEADER_X_FORWARDED_REST = "X-FORWARDED-REST";
+    private static final String HEADER_X_PWA = "X-PWA";
+    private static final String HEADER_X_DEVICE_PWA = "X-Device-PWA";
+    private static final String HEADER_COOKIE = "Cookie";
+    private static final String CONTENT_TYPE_JSON = "application/json";
 
     private final ObjectMapper objectMapper;
     private final OkHttpClient httpClient;
@@ -89,12 +96,15 @@ public class BasketSettingsService {
         }
         Request request = new Request.Builder()
                 .url(migrosCartUrl)
-                .header("Accept", "application/json")
-                .header("Referer", migrosCartReferer)
-                .header("X-FORWARDED-REST", String.valueOf(migrosCartHeaderForwardedRest))
-                .header("X-PWA", String.valueOf(migrosCartHeaderPwa))
-                .header("X-Device-PWA", String.valueOf(migrosCartHeaderDevicePwa))
-                .header("Cookie", migrosCartCookie)
+                .header(HEADER_ACCEPT, CONTENT_TYPE_JSON)
+                .header(HEADER_REFERER, migrosCartReferer)
+                //noinspection HttpHeaderName
+                .header(HEADER_X_FORWARDED_REST, String.valueOf(migrosCartHeaderForwardedRest))
+                //noinspection HttpHeaderName
+                .header(HEADER_X_PWA, String.valueOf(migrosCartHeaderPwa))
+                //noinspection HttpHeaderName
+                .header(HEADER_X_DEVICE_PWA, String.valueOf(migrosCartHeaderDevicePwa))
+                .header(HEADER_COOKIE, migrosCartCookie)
                 .build();
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful() || response.body() == null) {
@@ -111,10 +121,11 @@ public class BasketSettingsService {
             if (parsedMinBasket == null) {
                 log.warn("Migros basket minimum parse failed: minimumRequiredRevenue is missing or invalid");
             }
-            return new BasketMinimumSettingsResponse(
-                    ysMinimumBasketAmount == null ? BigDecimal.ZERO : ysMinimumBasketAmount,
-                    parsedMinBasket == null ? (mgMinimumBasketAmount == null ? BigDecimal.ZERO : mgMinimumBasketAmount) : parsedMinBasket
-            );
+            BigDecimal resolvedYsMinimum = resolveOrZero(ysMinimumBasketAmount);
+            BigDecimal resolvedMgMinimum = parsedMinBasket != null
+                    ? parsedMinBasket
+                    : resolveOrZero(mgMinimumBasketAmount);
+            return new BasketMinimumSettingsResponse(resolvedYsMinimum, resolvedMgMinimum);
         } catch (IOException exception) {
             log.warn("Migros basket minimum fetch IO failure: {}", exception.getMessage());
             return null;
@@ -145,44 +156,49 @@ public class BasketSettingsService {
         if (!matcher.find()) {
             return null;
         }
-        String candidate = matcher.group(1).replaceAll("[^0-9,\\.\\-]", "");
+        String candidate = matcher.group(1).replaceAll("[^\\d,.-]", "");
         if (candidate.isBlank()) {
             return null;
         }
 
         int commaCount = (int) candidate.chars().filter(ch -> ch == ',').count();
         int dotCount = (int) candidate.chars().filter(ch -> ch == '.').count();
-
-        if (commaCount > 0 && dotCount > 0) {
-            int lastComma = candidate.lastIndexOf(',');
-            int lastDot = candidate.lastIndexOf('.');
-            if (lastComma > lastDot) {
-                candidate = candidate.replace(".", "").replace(",", ".");
-            } else {
-                candidate = candidate.replace(",", "");
-            }
-        } else if (commaCount > 0) {
-            if (commaCount > 1) {
-                candidate = candidate.replace(",", "");
-            } else {
-                candidate = candidate.replace(",", ".");
-            }
-        } else if (dotCount > 0) {
-            if (dotCount > 1) {
-                candidate = candidate.replace(".", "");
-            } else {
-                int dotIndex = candidate.indexOf('.');
-                int digitsAfterDot = candidate.length() - dotIndex - 1;
-                if (digitsAfterDot == 3) {
-                    candidate = candidate.replace(".", "");
-                }
-            }
-        }
+        candidate = normalizeSeparators(candidate, commaCount, dotCount);
 
         try {
             return new BigDecimal(candidate);
         } catch (NumberFormatException ignored) {
             return null;
         }
+    }
+
+    private static String normalizeSeparators(String candidate, int commaCount, int dotCount) {
+        if (commaCount > 0 && dotCount > 0) {
+            int lastComma = candidate.lastIndexOf(',');
+            int lastDot = candidate.lastIndexOf('.');
+            return lastComma > lastDot
+                    ? candidate.replace(".", "").replace(",", ".")
+                    : candidate.replace(",", "");
+        }
+        if (commaCount > 0) {
+            return commaCount > 1 ? candidate.replace(",", "") : candidate.replace(",", ".");
+        }
+        if (dotCount > 1 || isThousandsDot(candidate)) {
+            return candidate.replace(".", "");
+        }
+        return candidate;
+    }
+
+    private static boolean isThousandsDot(String candidate) {
+        int dotIndex = candidate.indexOf('.');
+        if (dotIndex < 0) {
+            return false;
+        }
+        int digitsAfterDot = candidate.length() - dotIndex - 1;
+        return digitsAfterDot == 3;
+    }
+
+    private static BigDecimal resolveOrZero(BigDecimal value) {
+        return value == null ? BigDecimal.ZERO : value;
     }
 }

@@ -1,0 +1,27 @@
+﻿FROM maven:3.9.9-eclipse-temurin-21
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends wget gnupg ca-certificates \
+    && wget -q -O - https://dl.google.com/linux/linux_signing_key.pub \
+       | gpg --dearmor -o /usr/share/keyrings/google-linux.gpg \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-linux.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
+       > /etc/apt/sources.list.d/google-chrome.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends google-chrome-stable \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY .mvn .mvn
+COPY mvnw pom.xml ./
+COPY smart-pantry-common/pom.xml smart-pantry-common/pom.xml
+COPY migros-service/pom.xml migros-service/pom.xml
+COPY yemeksepeti-service/pom.xml yemeksepeti-service/pom.xml
+COPY discovery-server/pom.xml discovery-server/pom.xml
+RUN chmod +x mvnw
+
+EXPOSE 8080
+
+ENV APP_MODULE=migros-service
+ENV SPRING_BOOT_RUN_PROFILE=mg
+
+CMD ["sh", "-c", "./mvnw -pl ${APP_MODULE} -am spring-boot:run -Dspring-boot.run.profiles=${SPRING_BOOT_RUN_PROFILE}"]

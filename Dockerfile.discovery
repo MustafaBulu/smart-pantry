@@ -1,0 +1,27 @@
+FROM maven:3.9.9-eclipse-temurin-21 AS build
+WORKDIR /app
+
+COPY .mvn .mvn
+COPY mvnw pom.xml ./
+COPY smart-pantry-common/pom.xml smart-pantry-common/pom.xml
+COPY migros-service/pom.xml migros-service/pom.xml
+COPY yemeksepeti-service/pom.xml yemeksepeti-service/pom.xml
+COPY discovery-server/pom.xml discovery-server/pom.xml
+
+RUN chmod +x mvnw && ./mvnw -q -DskipTests -pl discovery-server -am dependency:go-offline
+
+COPY smart-pantry-common/src smart-pantry-common/src
+COPY migros-service/src migros-service/src
+COPY yemeksepeti-service/src yemeksepeti-service/src
+COPY discovery-server/src discovery-server/src
+
+RUN ./mvnw -q -DskipTests -pl discovery-server -am package
+
+FROM eclipse-temurin:21-jre-alpine
+WORKDIR /app
+
+COPY --from=build /app/discovery-server/target/smart-pantry-discovery-server.jar /app/app.jar
+
+EXPOSE 8761
+
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]

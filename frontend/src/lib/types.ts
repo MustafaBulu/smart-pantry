@@ -80,3 +80,48 @@ export type MarketplaceProductEntryResponse = {
   campaignPayQuantity: number | null;
   effectivePrice: number | null;
 };
+
+export type MarketplaceProductAddedResponse = {
+  categoryId: number;
+  marketplaceCode: string;
+  externalId: string;
+  name: string;
+  productId: number | null;
+  brandName: string;
+  imageUrl: string;
+  price: number | null;
+  moneyPrice: number | null;
+  basketDiscountThreshold: number | null;
+  basketDiscountPrice: number | null;
+  campaignBuyQuantity: number | null;
+  campaignPayQuantity: number | null;
+  effectivePrice: number | null;
+};
+
+export type BasketMinimumSettingsResponse = {
+  ysMinimumBasketAmount: number;
+  mgMinimumBasketAmount: number;
+};
+
+export type NeedListItemDto = {
+  key: string;
+  type: "PRODUCT" | "CATEGORY";
+  categoryId: number;
+  categoryName: string;
+  externalId: string | null;
+  marketplaceCode: "YS" | "MG" | null;
+  name: string;
+  imageUrl: string;
+  price: number | null;
+  moneyPrice: number | null;
+  basketDiscountThreshold: number | null;
+  basketDiscountPrice: number | null;
+  campaignBuyQuantity: number | null;
+  campaignPayQuantity: number | null;
+  effectivePrice: number | null;
+  urgency: "VERY_URGENT" | "URGENT" | "NOT_URGENT";
+  availabilityScore: number | null;
+  historyDayCount: number | null;
+  availabilityStatus: "Uygun" | "Normal" | "Pahali";
+  opportunityLevel: string | null;
+};

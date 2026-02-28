@@ -105,8 +105,7 @@ public class MigrosCategoryFetchService implements MarketplaceCategoryFetchServi
 
     private MigrosBasketDiscountParser.BasketDiscount resolveBasketDiscount(JsonNode entry) {
         JsonNode discountTags = MigrosJsonSupport.resolveDiscountTagsNode(
-                entry.path(MigrosConstants.CRM_DISCOUNT_TAGS_KEY),
-                MigrosConstants.TAG_KEY
+                entry.path(MigrosConstants.CRM_DISCOUNT_TAGS_KEY)
         );
         return MigrosJsonSupport.parseFromTextNodes(
                 discountTags,
@@ -117,8 +116,7 @@ public class MigrosCategoryFetchService implements MarketplaceCategoryFetchServi
 
     private List<String> extractDiscountTagTexts(JsonNode entry) {
         JsonNode discountTags = MigrosJsonSupport.resolveDiscountTagsNode(
-                entry.path(MigrosConstants.CRM_DISCOUNT_TAGS_KEY),
-                MigrosConstants.TAG_KEY
+                entry.path(MigrosConstants.CRM_DISCOUNT_TAGS_KEY)
         );
         if (!discountTags.isArray()) {
             return List.of();

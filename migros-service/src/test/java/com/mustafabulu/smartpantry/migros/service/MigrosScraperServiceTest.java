@@ -44,7 +44,7 @@ class MigrosScraperServiceTest {
                          "crmDiscountTags":{
                            "crmDiscountTags":[
                              {"tag":"50 TL Sepette 17,95 TL!"},
-                             {"tag":"2 Al 1 \u00D6de"}
+                             {"tag":"2 Al 1 Öde"}
                            ]
                          }
                        }

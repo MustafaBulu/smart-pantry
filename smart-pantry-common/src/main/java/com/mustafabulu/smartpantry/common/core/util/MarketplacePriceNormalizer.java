@@ -1,7 +1,5 @@
 package com.mustafabulu.smartpantry.common.core.util;
 
-import com.mustafabulu.smartpantry.common.enums.Marketplace;
-
 import java.math.BigDecimal;
 
 public final class MarketplacePriceNormalizer {
@@ -21,9 +19,7 @@ public final class MarketplacePriceNormalizer {
         return price;
     }
 
-    public static BigDecimal normalizeForDisplay(Marketplace marketplace, BigDecimal price) {
-        // Migros prices are already normalized in scraping/fetch layers.
-        // Applying another divide-by-100 here causes incorrect values like 157 -> 1.57.
+    public static BigDecimal normalizeForDisplay(BigDecimal price) {
         return price;
     }
 }

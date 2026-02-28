@@ -15,12 +15,12 @@ final class MigrosJsonSupport {
     private MigrosJsonSupport() {
     }
 
-    static JsonNode resolveDiscountTagsNode(JsonNode crmDiscountTagsNode, String tagKey) {
+    static JsonNode resolveDiscountTagsNode(JsonNode crmDiscountTagsNode) {
         if (isMissingOrNull(crmDiscountTagsNode)) {
             return MissingNode.getInstance();
         }
         ArrayNode tags = JsonNodeFactory.instance.arrayNode();
-        collectDiscountTagNodes(crmDiscountTagsNode, tags, tagKey);
+        collectDiscountTagNodes(crmDiscountTagsNode, tags, MigrosConstants.TAG_KEY);
         return tags.isEmpty() ? MissingNode.getInstance() : tags;
     }
 
@@ -50,8 +50,7 @@ final class MigrosJsonSupport {
         MigrosEffectivePriceCampaignParser.EffectivePriceCampaign fromTags =
                 parseFromTextNodes(
                         resolveDiscountTagsNode(
-                                entry.path(MigrosConstants.CRM_DISCOUNT_TAGS_KEY),
-                                MigrosConstants.TAG_KEY
+                                entry.path(MigrosConstants.CRM_DISCOUNT_TAGS_KEY)
                         ),
                         MigrosConstants.TAG_KEY,
                         MigrosEffectivePriceCampaignParser::parse

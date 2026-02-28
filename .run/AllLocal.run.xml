@@ -1,0 +1,9 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="AllLocal" type="CompoundRunConfigurationType" factoryName="Compound">
+    <toRun name="SmartPantryApplication" type="SpringBootApplicationConfigurationType" />
+    <toRun name="MigrosServiceApplication" type="SpringBootApplicationConfigurationType" />
+    <toRun name="YemeksepetiServiceApplication" type="SpringBootApplicationConfigurationType" />
+    <toRun name="FrontendDev" type="js.build_tools.npm" />
+    <method v="2" />
+  </configuration>
+</component>

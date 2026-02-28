@@ -10,13 +10,13 @@ public final class MigrosServiceApplication {
     }
 
     public static void main(String[] args) {
-        ensureDefaultPort(args, SERVICE_PORT);
+        ensureDefaultPort(args);
         new SpringApplicationBuilder(SmartPantryApplication.class)
                 .profiles("mg")
                 .run(args);
     }
 
-    private static void ensureDefaultPort(String[] args, String port) {
+    private static void ensureDefaultPort(String[] args) {
         if (System.getProperty("server.port") != null) {
             return;
         }
@@ -25,6 +25,6 @@ public final class MigrosServiceApplication {
                 return;
             }
         }
-        System.setProperty("server.port", port);
+        System.setProperty("server.port", MigrosServiceApplication.SERVICE_PORT);
     }
 }

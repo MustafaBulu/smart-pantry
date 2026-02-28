@@ -164,8 +164,7 @@ public class MigrosScraperService {
 
     private MigrosBasketDiscountParser.BasketDiscount resolveBasketDiscount(JsonNode product) {
         JsonNode discountTags = MigrosJsonSupport.resolveDiscountTagsNode(
-                product.path(MigrosConstants.CRM_DISCOUNT_TAGS_KEY),
-                MigrosConstants.TAG_KEY
+                product.path(MigrosConstants.CRM_DISCOUNT_TAGS_KEY)
         );
         return MigrosJsonSupport.parseFromTextNodes(
                 discountTags,

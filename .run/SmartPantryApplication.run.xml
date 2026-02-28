@@ -1,0 +1,16 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="SmartPantryApplication" type="SpringBootApplicationConfigurationType" factoryName="Spring Boot">
+    <module name="smart-pantry-common" />
+    <option name="SPRING_BOOT_MAIN_CLASS" value="com.mustafabulu.smartpantry.SmartPantryApplication" />
+    <option name="ENV_VARIABLES">
+      <map>
+        <entry key="DB_URL" value="jdbc:postgresql://localhost:5432/smartpantry" />
+        <entry key="DB_USERNAME" value="postgres" />
+        <entry key="DB_PASSWORD" value="root" />
+      </map>
+    </option>
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>

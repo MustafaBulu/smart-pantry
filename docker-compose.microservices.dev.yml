@@ -1,0 +1,146 @@
+services:
+  discovery-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: smart-pantry-discovery-server-dev
+    command: ["./mvnw", "-f", "discovery-server/pom.xml", "spring-boot:run"]
+    ports:
+      - "8761:8761"
+    volumes:
+      - ./:/app
+      - maven_cache_dev_ms:/root/.m2
+
+  db:
+    image: postgres:16-alpine
+    container_name: smart-pantry-db-dev-ms
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: root
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data_dev_ms:/var/lib/postgresql/data
+      - ./scripts/db/init-microservices.sql:/docker-entrypoint-initdb.d/init-microservices.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  migros-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: smart-pantry-migros-service-dev
+    command:
+      [
+        "sh",
+        "-c",
+        "./mvnw -q -DskipTests -pl smart-pantry-common,migros-service -am install && ./mvnw -f migros-service/pom.xml spring-boot:run -Dspring-boot.run.profiles=mg",
+      ]
+    env_file:
+      - .env
+    environment:
+      APP_MODULE: migros-service
+      SPRING_BOOT_RUN_PROFILE: mg
+      SPRING_PROFILES_ACTIVE: mg
+      DB_URL: jdbc:postgresql://db:5432/smart_pantry_mg
+      DB_USERNAME: postgres
+      DB_PASSWORD: root
+      SERVER_PORT: 8080
+      EUREKA_DEFAULT_ZONE: http://discovery-server:8761/eureka/
+      SPRINGDOC_SWAGGER_UI_CONFIG_URL: /mg/v3/api-docs/swagger-config
+      SPRINGDOC_SWAGGER_UI_URL: /mg/v3/api-docs
+    depends_on:
+      db:
+        condition: service_healthy
+      discovery-server:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8081/actuator/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./:/app
+      - maven_cache_dev_ms:/root/.m2
+
+  yemeksepeti-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: smart-pantry-yemeksepeti-service-dev
+    command:
+      [
+        "sh",
+        "-c",
+        "./mvnw -q -DskipTests -pl smart-pantry-common,yemeksepeti-service -am install && ./mvnw -f yemeksepeti-service/pom.xml spring-boot:run -Dspring-boot.run.profiles=ys",
+      ]
+    env_file:
+      - .env
+    environment:
+      APP_MODULE: yemeksepeti-service
+      SPRING_BOOT_RUN_PROFILE: ys
+      SPRING_PROFILES_ACTIVE: ys
+      DB_URL: jdbc:postgresql://db:5432/smart_pantry_ys
+      DB_USERNAME: postgres
+      DB_PASSWORD: root
+      SERVER_PORT: 8080
+      EUREKA_DEFAULT_ZONE: http://discovery-server:8761/eureka/
+      SPRINGDOC_SWAGGER_UI_CONFIG_URL: /ys/v3/api-docs/swagger-config
+      SPRINGDOC_SWAGGER_UI_URL: /ys/v3/api-docs
+    depends_on:
+      db:
+        condition: service_healthy
+      discovery-server:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8082/actuator/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    ports:
+      - "8082:8082"
+    volumes:
+      - ./:/app
+      - maven_cache_dev_ms:/root/.m2
+
+  api-gateway:
+    image: nginx:1.27-alpine
+    container_name: smart-pantry-api-gateway-dev
+    depends_on:
+      migros-service:
+        condition: service_healthy
+      yemeksepeti-service:
+        condition: service_healthy
+    volumes:
+      - ./scripts/gateway/nginx.microservices.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8080:8080"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: smart-pantry-frontend-dev-ms
+    environment:
+      NEXT_PUBLIC_API_BASE: http://localhost:8080
+      NEXT_PUBLIC_GATEWAY_ONLY: "true"
+      WATCHPACK_POLLING: "true"
+    depends_on:
+      api-gateway:
+        condition: service_started
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules_dev_ms:/app/node_modules
+
+volumes:
+  postgres_data_dev_ms:
+  maven_cache_dev_ms:
+  frontend_node_modules_dev_ms:
