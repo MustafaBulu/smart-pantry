@@ -241,6 +241,51 @@ class CrossPlatformProductMatcherServiceTest {
     }
 
     @Test
+    void buildMarketplacePairsMatchesAttachedPackSuffixWithApostrophe() {
+        MarketplaceProductCandidateResponse ys = new MarketplaceProductCandidateResponse(
+                "YS",
+                "ys-apostrophe-pack",
+                "Pinar Ayran 2'li 200 ml",
+                "Pinar",
+                "https://cdn.test/images/pinar-pack.jpg",
+                new BigDecimal("39.90"),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+        );
+        MarketplaceProductCandidateResponse mg = new MarketplaceProductCandidateResponse(
+                "MG",
+                "mg-plain-pack",
+                "Pinar Ayran 2li 200 ml",
+                "Pinar",
+                "https://cdn.test/images/pinar-pack.jpg",
+                new BigDecimal("39.90"),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+        );
+
+        List<MarketplaceProductMatchPairResponse> pairs =
+                matcherService.buildMarketplacePairs(List.of(ys), List.of(mg), 0.4d);
+
+        assertEquals(1, pairs.size());
+        assertEquals("ys-apostrophe-pack", pairs.getFirst().ys().externalId());
+        assertEquals("mg-plain-pack", pairs.getFirst().mg().externalId());
+    }
+
+    @Test
     void buildMarketplacePairsMatchesAyranWhenOnlyPackagingWordsDiffer() {
         MarketplaceProductCandidateResponse ys = new MarketplaceProductCandidateResponse(
                 "YS",

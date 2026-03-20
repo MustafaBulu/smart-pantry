@@ -51,7 +51,7 @@ class MigrosCatalogCategoryRangeImportServiceTest {
     }
 
     @Test
-    void importFromCategoryRangeCollectsPagesAndPersistsCreatesAndUpdates() throws Exception {
+    void importFromCategoryRangeCollectsPagesAndPersistsCreatesAndUpdates() {
         MigrosCatalogProduct existing = new MigrosCatalogProduct();
         existing.setExternalId("mg-2");
         existing.setProductName("Old Product");

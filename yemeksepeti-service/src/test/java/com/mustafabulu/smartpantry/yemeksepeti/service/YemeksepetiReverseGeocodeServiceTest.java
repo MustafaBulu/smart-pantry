@@ -87,10 +87,11 @@ class YemeksepetiReverseGeocodeServiceTest {
                 .code(200)
                 .message("OK")
                 .build());
+        YemeksepetiReverseGeocodeRequest request = new YemeksepetiReverseGeocodeRequest(41.0, 29.0);
 
         SPException exception = assertThrows(
                 SPException.class,
-                () -> service.reverse(new YemeksepetiReverseGeocodeRequest(41.0, 29.0))
+                () -> service.reverse(request)
         );
 
         assertEquals(HttpStatus.BAD_GATEWAY, exception.getStatusCode());
@@ -101,10 +102,11 @@ class YemeksepetiReverseGeocodeServiceTest {
     void throwsWhenResponseIsUnsuccessful() throws Exception {
         when(httpClient.newCall(any(Request.class))).thenReturn(call);
         when(call.execute()).thenReturn(response(502, "{\"error\":\"bad gateway\"}"));
+        YemeksepetiReverseGeocodeRequest request = new YemeksepetiReverseGeocodeRequest(41.0, 29.0);
 
         SPException exception = assertThrows(
                 SPException.class,
-                () -> service.reverse(new YemeksepetiReverseGeocodeRequest(41.0, 29.0))
+                () -> service.reverse(request)
         );
 
         assertEquals(HttpStatus.BAD_GATEWAY, exception.getStatusCode());
@@ -115,10 +117,11 @@ class YemeksepetiReverseGeocodeServiceTest {
     void throwsWhenHttpClientFails() throws Exception {
         when(httpClient.newCall(any(Request.class))).thenReturn(call);
         when(call.execute()).thenThrow(new IOException("timeout"));
+        YemeksepetiReverseGeocodeRequest request = new YemeksepetiReverseGeocodeRequest(41.0, 29.0);
 
         SPException exception = assertThrows(
                 SPException.class,
-                () -> service.reverse(new YemeksepetiReverseGeocodeRequest(41.0, 29.0))
+                () -> service.reverse(request)
         );
 
         assertEquals(HttpStatus.BAD_GATEWAY, exception.getStatusCode());

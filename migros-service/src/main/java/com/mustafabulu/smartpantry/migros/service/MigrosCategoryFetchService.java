@@ -702,16 +702,14 @@ public class MigrosCategoryFetchService implements MarketplaceCategoryFetchServi
         boolean hasDecimalSeparator = false;
         while (current < text.length()) {
             char currentChar = text.charAt(current);
-            if (Character.isDigit(currentChar)) {
-                current++;
-                continue;
+            boolean isDecimalSeparator = currentChar == '.' || currentChar == ',';
+            if (!Character.isDigit(currentChar) && (hasDecimalSeparator || !isDecimalSeparator)) {
+                break;
             }
-            if (!hasDecimalSeparator && (currentChar == '.' || currentChar == ',')) {
+            if (isDecimalSeparator) {
                 hasDecimalSeparator = true;
-                current++;
-                continue;
             }
-            break;
+            current++;
         }
         return current;
     }
@@ -737,16 +735,14 @@ public class MigrosCategoryFetchService implements MarketplaceCategoryFetchServi
         boolean hasDecimal = false;
         while (unitStart < token.length()) {
             char current = token.charAt(unitStart);
-            if (Character.isDigit(current)) {
-                unitStart++;
-                continue;
+            boolean isDecimalSeparator = current == '.' || current == ',';
+            if (!Character.isDigit(current) && (hasDecimal || !isDecimalSeparator)) {
+                break;
             }
-            if (!hasDecimal && (current == '.' || current == ',')) {
+            if (isDecimalSeparator) {
                 hasDecimal = true;
-                unitStart++;
-                continue;
             }
-            break;
+            unitStart++;
         }
         if (unitStart >= token.length()) {
             return null;

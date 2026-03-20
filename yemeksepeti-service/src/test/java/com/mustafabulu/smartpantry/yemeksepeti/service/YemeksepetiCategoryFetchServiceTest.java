@@ -156,6 +156,47 @@ class YemeksepetiCategoryFetchServiceTest {
         assertEquals(new BigDecimal("74.85"), result.getFirst().price());
     }
 
+    @Test
+    void fetchByCategoryUsesDeclaredNumberOfUnitsWhenPackSuffixContainsApostrophe() throws Exception {
+        HttpClient httpClient = mock(HttpClient.class);
+        HttpResponse<String> response = stringResponse(200, """
+                {
+                  "data":{
+                    "searchProducts":{
+                      "products":{
+                        "items":[
+                          {
+                            "payload":{
+                              "productID":"ys-apostrophe",
+                              "name":"Pinar Ayran 2'li 200 ml",
+                              "price":19.95,
+                              "urls":["https://cdn.example.com/apostrophe.jpg"],
+                              "attributes":[
+                                {"key":"contentsValue","value":"200"},
+                                {"key":"contentsUnit","value":"ml"},
+                                {"key":"numberOfUnits","value":"2"}
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+                """);
+        when(httpClient.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class))).thenReturn(response);
+
+        YemeksepetiCategoryFetchService service = new YemeksepetiCategoryFetchService(httpClient, new ObjectMapper());
+
+        List<MarketplaceCategoryFetchService.MarketplaceProductCandidate> result = service.fetchByCategory("ayran");
+
+        assertEquals(1, result.size());
+        assertEquals(2, result.getFirst().packCount());
+        assertEquals("ml", result.getFirst().unit());
+        assertEquals(400, result.getFirst().unitValue());
+        assertEquals(new BigDecimal("19.95"), result.getFirst().price());
+    }
+
     private HttpResponse<String> stringResponse(int statusCode, String body) {
         HttpResponse<String> response = mock(HttpResponse.class);
         when(response.statusCode()).thenReturn(statusCode);

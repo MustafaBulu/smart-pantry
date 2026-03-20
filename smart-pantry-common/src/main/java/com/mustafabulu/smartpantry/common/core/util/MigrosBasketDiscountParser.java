@@ -51,11 +51,10 @@ public final class MigrosBasketDiscountParser {
         int start = end;
         while (start >= 0) {
             char current = text.charAt(start);
-            if (Character.isDigit(current) || current == '.' || current == ',') {
-                start--;
-                continue;
+            if (!(Character.isDigit(current) || current == '.' || current == ',')) {
+                break;
             }
-            break;
+            start--;
         }
         return text.substring(start + 1, end + 1);
     }

@@ -117,10 +117,11 @@ class YemeksepetiVendorResolverServiceTest {
     void throwsWhenItemsArrayIsMissing() throws Exception {
         when(httpClient.newCall(any(Request.class))).thenReturn(call);
         when(call.execute()).thenReturn(response(200, "{\"data\":{\"items\":[]}}"));
+        YemeksepetiReverseGeocodeRequest request = new YemeksepetiReverseGeocodeRequest(41.0, 29.0);
 
         SPException exception = assertThrows(
                 SPException.class,
-                () -> service.resolve(new YemeksepetiReverseGeocodeRequest(41.0, 29.0))
+                () -> service.resolve(request)
         );
 
         assertEquals(HttpStatus.NOT_FOUND, exception.getStatusCode());
@@ -132,10 +133,11 @@ class YemeksepetiVendorResolverServiceTest {
         when(call.execute()).thenReturn(response(200, """
                 {"data":{"items":[{"redirection_url":"https://vendor.example/path"}]}}
                 """));
+        YemeksepetiReverseGeocodeRequest request = new YemeksepetiReverseGeocodeRequest(41.0, 29.0);
 
         SPException exception = assertThrows(
                 SPException.class,
-                () -> service.resolve(new YemeksepetiReverseGeocodeRequest(41.0, 29.0))
+                () -> service.resolve(request)
         );
 
         assertEquals(HttpStatus.BAD_GATEWAY, exception.getStatusCode());
@@ -145,10 +147,11 @@ class YemeksepetiVendorResolverServiceTest {
     void throwsWhenHttpClientFails() throws Exception {
         when(httpClient.newCall(any(Request.class))).thenReturn(call);
         when(call.execute()).thenThrow(new IOException("timeout"));
+        YemeksepetiReverseGeocodeRequest request = new YemeksepetiReverseGeocodeRequest(41.0, 29.0);
 
         SPException exception = assertThrows(
                 SPException.class,
-                () -> service.resolve(new YemeksepetiReverseGeocodeRequest(41.0, 29.0))
+                () -> service.resolve(request)
         );
 
         assertEquals(HttpStatus.BAD_GATEWAY, exception.getStatusCode());

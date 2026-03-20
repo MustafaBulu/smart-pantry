@@ -24,10 +24,11 @@ class AuthControllerTest {
     @Test
     void throwsWhenAuthIsNotConfigured() {
         AuthController controller = new AuthController("admin", "", jwtService);
+        AuthTokenRequest request = new AuthTokenRequest("admin", "secret");
 
         SPException exception = assertThrows(
                 SPException.class,
-                () -> controller.issueToken(new AuthTokenRequest("admin", "secret"))
+                () -> controller.issueToken(request)
         );
 
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, exception.getStatusCode());
@@ -37,10 +38,11 @@ class AuthControllerTest {
     @Test
     void throwsWhenCredentialsAreInvalid() {
         AuthController controller = new AuthController("admin", "secret", jwtService);
+        AuthTokenRequest request = new AuthTokenRequest("admin", "wrong");
 
         SPException exception = assertThrows(
                 SPException.class,
-                () -> controller.issueToken(new AuthTokenRequest("admin", "wrong"))
+                () -> controller.issueToken(request)
         );
 
         assertEquals(HttpStatus.UNAUTHORIZED, exception.getStatusCode());

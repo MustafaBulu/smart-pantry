@@ -23,4 +23,13 @@ class MigrosBasketDiscountParserTest {
         assertNull(MigrosBasketDiscountParser.parse("indirim yok"));
         assertNull(MigrosBasketDiscountParser.parse(null));
     }
+
+    @Test
+    void parseReturnsDiscountWhenThresholdContainsTrailingWhitespace() {
+        MigrosBasketDiscountParser.BasketDiscount discount =
+                MigrosBasketDiscountParser.parse("75 TL   Sepette 59,95 TL");
+
+        assertEquals(0, new BigDecimal("75").compareTo(discount.threshold()));
+        assertEquals(0, new BigDecimal("59.95").compareTo(discount.discountedPrice()));
+    }
 }

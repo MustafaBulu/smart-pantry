@@ -48,7 +48,7 @@ class MigrosCategoryFetchServiceTest {
     }
 
     @Test
-    void listSeedCategoryKeysParsesPrettyNamesFromArray() throws Exception {
+    void listSeedCategoryKeysParsesPrettyNamesFromArray() {
         stubResponses(Map.of(
                 "https://www.migros.com.tr/rest/categories/top-level?reid=1772491546503000001",
                 """
@@ -66,7 +66,7 @@ class MigrosCategoryFetchServiceTest {
     }
 
     @Test
-    void fetchAllByUrlCollectsPagesAndKeepsUniqueProducts() throws Exception {
+    void fetchAllByUrlCollectsPagesAndKeepsUniqueProducts() {
         stubResponses(Map.of(
                 "https://www.migros.com.tr/rest/search?page=test&sayfa=1",
                 """
@@ -120,7 +120,7 @@ class MigrosCategoryFetchServiceTest {
     }
 
     @Test
-    void fetchByCategoryBuildsCandidateFromSearchAndDetailsResponses() throws Exception {
+    void fetchByCategoryBuildsCandidateFromSearchAndDetailsResponses() {
         stubResponses(Map.of(
                 "https://www.migros.com.tr/rest/search/screens/products?q=sut&reid=1770560051246000048",
                 """
@@ -163,14 +163,14 @@ class MigrosCategoryFetchServiceTest {
     }
 
     @Test
-    void fetchByCategoryReturnsEmptyWhenSearchFails() throws Exception {
+    void fetchByCategoryReturnsEmptyWhenSearchFails() {
         stubFailure("https://www.migros.com.tr/rest/search/screens/products?q=sut&reid=1770560051246000048", 500);
 
         assertTrue(service.fetchByCategory("sut").isEmpty());
     }
 
     @Test
-    void fetchAllByUrlParsesCompactPackPatterns() throws Exception {
+    void fetchAllByUrlParsesCompactPackPatterns() {
         stubResponses(Map.of(
                 "https://www.migros.com.tr/rest/search?page=test&sayfa=1",
                 """
@@ -205,6 +205,33 @@ class MigrosCategoryFetchServiceTest {
         assertEquals(2, result.size());
         assertEquals(2, result.getFirst().candidate().packCount());
         assertEquals(2, result.get(1).candidate().packCount());
+    }
+
+    @Test
+    void fetchAllByUrlParsesApostropheSeparatedPackSuffix() {
+        stubResponses(Map.of(
+                "https://www.migros.com.tr/rest/search?page=test&sayfa=1",
+                """
+                {"data":{"searchInfo":{"pageCount":1,"storeProductInfos":[
+                  {
+                    "id":"mg-apostrophe",
+                    "name":"Pinar Ayran 2'li",
+                    "brand":{"name":"Pinar"},
+                    "socialProofInfo":{"categoryName":"Icecek"},
+                    "price":39.90,
+                    "shownPrice":37.90,
+                    "images":[{"urls":{"PRODUCT_LIST":"https://cdn.example.com/apostrophe.jpg"}}],
+                    "propertyInfosMap":{"MAIN":[{"customId":"netKg","name":"Net Miktar","value":"200 ml"}]}
+                  }
+                ]}}}
+                """
+        ));
+
+        List<MarketplaceCatalogUrlFetchService.CatalogUrlProductCandidate> result =
+                service.fetchAllByUrl("https://www.migros.com.tr/rest/search?page=test");
+
+        assertEquals(1, result.size());
+        assertEquals(2, result.getFirst().candidate().packCount());
     }
 
     private void stubResponses(Map<String, String> responsesByUrl) {

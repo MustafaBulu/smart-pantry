@@ -8,6 +8,7 @@ import com.mustafabulu.smartpantry.common.enums.Marketplace;
 import com.mustafabulu.smartpantry.common.service.MarketplaceCategoryFetchService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Service;
 
@@ -125,6 +126,7 @@ public class YemeksepetiCategoryFetchService implements MarketplaceCategoryFetch
         );
     }
 
+    @Autowired
     YemeksepetiCategoryFetchService(HttpClient httpClient, ObjectMapper objectMapper) {
         this.httpClient = httpClient;
         this.objectMapper = objectMapper;

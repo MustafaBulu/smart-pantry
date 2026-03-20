@@ -1252,16 +1252,16 @@ public class CrossPlatformProductMatcherService {
             if (measurementSpan != null) {
                 cleaned.append(' ');
                 index = measurementSpan.end();
-                continue;
+            } else {
+                ParsedToken first = readNumericToken(value, digitIndex);
+                if (first == null) {
+                    cleaned.append(value.charAt(digitIndex));
+                    index = digitIndex + 1;
+                    continue;
+                }
+                cleaned.append(value, digitIndex, first.end());
+                index = first.end();
             }
-            ParsedToken first = readNumericToken(value, digitIndex);
-            if (first == null) {
-                cleaned.append(value.charAt(digitIndex));
-                index = digitIndex + 1;
-                continue;
-            }
-            cleaned.append(value, digitIndex, first.end());
-            index = first.end();
         }
         return cleaned.toString();
     }
@@ -1298,16 +1298,16 @@ public class CrossPlatformProductMatcherService {
             if (semanticPackSpan != null) {
                 cleaned.append(' ');
                 index = semanticPackSpan.end();
-                continue;
+            } else {
+                ParsedToken number = readNumericToken(value, digitIndex);
+                if (number == null) {
+                    cleaned.append(value.charAt(digitIndex));
+                    index = digitIndex + 1;
+                    continue;
+                }
+                cleaned.append(value, digitIndex, number.end());
+                index = number.end();
             }
-            ParsedToken number = readNumericToken(value, digitIndex);
-            if (number == null) {
-                cleaned.append(value.charAt(digitIndex));
-                index = digitIndex + 1;
-                continue;
-            }
-            cleaned.append(value, digitIndex, number.end());
-            index = number.end();
         }
         return cleaned.toString();
     }
@@ -1409,11 +1409,7 @@ public class CrossPlatformProductMatcherService {
     }
 
     private int skipPackWhitespace(String value, int index) {
-        int current = index;
-        while (current < value.length() && Character.isWhitespace(value.charAt(current))) {
-            current++;
-        }
-        return current;
+        return skipMeasurementWhitespace(value, index);
     }
 
     private boolean isPackSuffix(String suffix) {
@@ -1458,16 +1454,14 @@ public class CrossPlatformProductMatcherService {
         boolean seenSeparator = false;
         while (end < value.length()) {
             char current = value.charAt(end);
-            if (Character.isDigit(current)) {
-                end++;
-                continue;
+            boolean isDecimalSeparator = current == '.' || current == ',';
+            if (!Character.isDigit(current) && (seenSeparator || !isDecimalSeparator)) {
+                break;
             }
-            if (!seenSeparator && (current == '.' || current == ',')) {
+            if (isDecimalSeparator) {
                 seenSeparator = true;
-                end++;
-                continue;
             }
-            break;
+            end++;
         }
         return new ParsedToken(value.substring(start, end), end);
     }
