@@ -76,4 +76,5 @@ public class MarketplaceProduct {
 
     @Column(precision = 19, scale = 2)
     private BigDecimal effectivePrice;
+
 }

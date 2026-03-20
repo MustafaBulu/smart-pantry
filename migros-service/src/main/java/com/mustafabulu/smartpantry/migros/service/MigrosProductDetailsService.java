@@ -18,6 +18,7 @@ import com.mustafabulu.smartpantry.common.service.PlatformProductDetailsService;
 import com.mustafabulu.smartpantry.common.core.util.ProductUrlResolver;
 import com.mustafabulu.smartpantry.common.core.util.ProductUnitUpdater;
 import com.mustafabulu.smartpantry.common.core.util.NameFormatter;
+import com.mustafabulu.smartpantry.common.core.util.MarketplacePricingMetadataUpdater;
 import lombok.AllArgsConstructor;
 import com.mustafabulu.smartpantry.common.core.log.LogMessages;
 import lombok.extern.slf4j.Slf4j;
@@ -213,32 +214,14 @@ public class MigrosProductDetailsService implements PlatformProductDetailsServic
             MarketplaceProduct marketplaceProduct,
             MigrosProductDetails details
     ) {
-        boolean updated = false;
-        if (details.basketDiscountThreshold() != null
-                && !details.basketDiscountThreshold().equals(marketplaceProduct.getBasketDiscountThreshold())) {
-            marketplaceProduct.setBasketDiscountThreshold(details.basketDiscountThreshold());
-            updated = true;
-        }
-        if (details.basketDiscountPrice() != null
-                && !details.basketDiscountPrice().equals(marketplaceProduct.getBasketDiscountPrice())) {
-            marketplaceProduct.setBasketDiscountPrice(details.basketDiscountPrice());
-            updated = true;
-        }
-        if (details.campaignBuyQuantity() != null
-                && !details.campaignBuyQuantity().equals(marketplaceProduct.getCampaignBuyQuantity())) {
-            marketplaceProduct.setCampaignBuyQuantity(details.campaignBuyQuantity());
-            updated = true;
-        }
-        if (details.campaignPayQuantity() != null
-                && !details.campaignPayQuantity().equals(marketplaceProduct.getCampaignPayQuantity())) {
-            marketplaceProduct.setCampaignPayQuantity(details.campaignPayQuantity());
-            updated = true;
-        }
-        if (details.effectivePrice() != null
-                && !details.effectivePrice().equals(marketplaceProduct.getEffectivePrice())) {
-            marketplaceProduct.setEffectivePrice(details.effectivePrice());
-            updated = true;
-        }
+        boolean updated = MarketplacePricingMetadataUpdater.applyCampaignAndDiscountMetadata(
+                marketplaceProduct,
+                details.basketDiscountThreshold(),
+                details.basketDiscountPrice(),
+                details.campaignBuyQuantity(),
+                details.campaignPayQuantity(),
+                details.effectivePrice()
+        );
         if (updated) {
             marketplaceProductRepository.save(marketplaceProduct);
         }

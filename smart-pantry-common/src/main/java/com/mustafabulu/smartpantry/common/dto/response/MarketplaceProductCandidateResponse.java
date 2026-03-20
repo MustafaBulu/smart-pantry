@@ -27,6 +27,11 @@ public record MarketplaceProductCandidateResponse(
         @Schema(description = "Campaign pay quantity for effective pricing", example = "1")
         Integer campaignPayQuantity,
         @Schema(description = "Effective unit price with campaign", example = "100.00")
-        java.math.BigDecimal effectivePrice
-) {
-}
+        java.math.BigDecimal effectivePrice,
+        @Schema(description = "Normalized product unit, e.g. g or ml", example = "g")
+        String unit,
+        @Schema(description = "Normalized unit value", example = "500")
+        Integer unitValue,
+        @Schema(description = "Pack count if product is multi-pack", example = "2")
+        Integer packCount
+) {}

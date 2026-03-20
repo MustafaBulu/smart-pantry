@@ -4,6 +4,8 @@ import com.mustafabulu.smartpantry.common.dto.response.CategoryResponse;
 import com.mustafabulu.smartpantry.common.dto.response.MarketplaceProductAddedResponse;
 import com.mustafabulu.smartpantry.common.dto.response.MarketplaceProductCandidateResponse;
 import com.mustafabulu.smartpantry.common.dto.response.MarketplaceProductEntryResponse;
+import com.mustafabulu.smartpantry.common.dto.response.MarketplaceProductMatchPairResponse;
+import com.mustafabulu.smartpantry.common.dto.response.MarketplaceProductMatchScoreResponse;
 import com.mustafabulu.smartpantry.common.core.exception.SPException;
 import com.mustafabulu.smartpantry.common.core.response.ResponseMessages;
 import com.mustafabulu.smartpantry.common.core.util.MarketplacePriceNormalizer;
@@ -11,14 +13,17 @@ import com.mustafabulu.smartpantry.common.core.util.MarketplaceCodeResolver;
 import com.mustafabulu.smartpantry.common.enums.Marketplace;
 import com.mustafabulu.smartpantry.common.model.Category;
 import com.mustafabulu.smartpantry.common.model.MarketplaceProduct;
+import com.mustafabulu.smartpantry.common.model.MarketplaceManualMatch;
 import com.mustafabulu.smartpantry.common.model.PriceHistory;
 import com.mustafabulu.smartpantry.common.model.Product;
 import com.mustafabulu.smartpantry.common.repository.CategoryRepository;
+import com.mustafabulu.smartpantry.common.repository.MarketplaceManualMatchRepository;
 import com.mustafabulu.smartpantry.common.repository.MarketplaceProductRepository;
 import com.mustafabulu.smartpantry.common.repository.ProductRepository;
 import com.mustafabulu.smartpantry.common.repository.PriceHistoryRepository;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,14 +42,15 @@ import java.util.stream.Stream;
 @AllArgsConstructor
 @Slf4j
 public class CategoryService {
-
     private final CategoryRepository categoryRepository;
     private final ProductRepository productRepository;
     private final MarketplaceProductRepository marketplaceProductRepository;
+    private final MarketplaceManualMatchRepository marketplaceManualMatchRepository;
     private final PriceHistoryRepository priceHistoryRepository;
     private final MarketplaceCategorySearchService marketplaceCategorySearchService;
+    private final CrossPlatformProductMatcherService crossPlatformProductMatcherService;
 
-    public CategoryResponse createCategory(String name) {
+    public CategoryResponse createCategory(String name, String mainCategory) {
         if (name == null || name.isBlank()) {
             throw new SPException(
                     HttpStatus.BAD_REQUEST,
@@ -62,17 +68,22 @@ public class CategoryService {
         }
         Category created = new Category();
         created.setName(trimmedName);
+        created.setMainCategory(normalizeMainCategory(mainCategory));
         Category saved = categoryRepository.save(created);
-        return new CategoryResponse(saved.getId(), saved.getName());
+        return new CategoryResponse(saved.getId(), saved.getName(), saved.getMainCategory());
     }
 
     public List<CategoryResponse> listCategories() {
         return categoryRepository.findAll().stream()
-                .map(category -> new CategoryResponse(category.getId(), category.getName()))
+                .map(category -> new CategoryResponse(
+                        category.getId(),
+                        category.getName(),
+                        category.getMainCategory()
+                ))
                 .toList();
     }
 
-    public CategoryResponse updateCategory(Long id, String name) {
+    public CategoryResponse updateCategory(Long id, String name, String mainCategory) {
         if (id == null) {
             throw new SPException(
                     HttpStatus.BAD_REQUEST,
@@ -103,8 +114,9 @@ public class CategoryService {
             );
         }
         category.setName(trimmedName);
+        category.setMainCategory(normalizeMainCategory(mainCategory));
         Category saved = categoryRepository.save(category);
-        return new CategoryResponse(saved.getId(), saved.getName());
+        return new CategoryResponse(saved.getId(), saved.getName(), saved.getMainCategory());
     }
 
     @Transactional
@@ -131,6 +143,7 @@ public class CategoryService {
         if (!products.isEmpty()) {
             productRepository.deleteAll(products);
         }
+        marketplaceManualMatchRepository.deleteByCategory(category);
 
         categoryRepository.delete(category);
     }
@@ -185,7 +198,10 @@ public class CategoryService {
                             candidate.campaignPayQuantity(),
                             MarketplacePriceNormalizer.normalizeForDisplay(
                                     candidate.effectivePrice()
-                            )
+                            ),
+                            candidate.unit(),
+                            candidate.unitValue(),
+                            candidate.packCount()
                     );
                 })
                 .toList();
@@ -197,6 +213,95 @@ public class CategoryService {
                 durationMs
         );
         return responses;
+    }
+
+
+    public List<MarketplaceProductMatchPairResponse> matchMarketplaceProducts(
+            Long categoryId,
+            List<MarketplaceProductCandidateResponse> ys,
+            List<MarketplaceProductCandidateResponse> mg,
+            Double minScore
+    ) {
+        double threshold = minScore == null ? 0.76d : minScore;
+        if (!Double.isFinite(threshold)) {
+            threshold = 0.76d;
+        }
+        threshold = Math.max(0d, Math.min(1d, threshold));
+        List<MarketplaceProductCandidateResponse> safeYs = ys == null ? List.of() : ys;
+        List<MarketplaceProductCandidateResponse> safeMg = mg == null ? List.of() : mg;
+        List<MarketplaceProductMatchPairResponse> autoPairs =
+                crossPlatformProductMatcherService.buildMarketplacePairs(safeYs, safeMg, threshold);
+        return mergeManualMatches(categoryId, safeYs, safeMg, autoPairs);
+    }
+
+    @Transactional
+    public void saveManualMarketplaceMatch(
+            Long categoryId,
+            String ysExternalId,
+            String mgExternalId
+    ) {
+        Category category = requireCategory(categoryId);
+        String normalizedYsExternalId = normalizeExternalId(ysExternalId);
+        String normalizedMgExternalId = normalizeExternalId(mgExternalId);
+        if (isBlank(normalizedYsExternalId) || isBlank(normalizedMgExternalId)) {
+            throw new SPException(
+                    HttpStatus.BAD_REQUEST,
+                    "Manuel eslestirme icin her iki external id zorunludur.",
+                    "MANUAL_MATCH_IDS_REQUIRED"
+            );
+        }
+        if (marketplaceManualMatchRepository.findByCategoryIdAndYsExternalIdAndMgExternalId(
+                categoryId,
+                normalizedYsExternalId,
+                normalizedMgExternalId
+        ).isPresent()) {
+            return;
+        }
+        marketplaceManualMatchRepository.deleteByCategoryIdAndYsExternalId(categoryId, normalizedYsExternalId);
+        marketplaceManualMatchRepository.deleteByCategoryIdAndMgExternalId(categoryId, normalizedMgExternalId);
+        MarketplaceManualMatch manualMatch = new MarketplaceManualMatch();
+        manualMatch.setCategory(category);
+        manualMatch.setYsExternalId(normalizedYsExternalId);
+        manualMatch.setMgExternalId(normalizedMgExternalId);
+        try {
+            marketplaceManualMatchRepository.saveAndFlush(manualMatch);
+        } catch (DataIntegrityViolationException ex) {
+            if (marketplaceManualMatchRepository.findByCategoryIdAndYsExternalIdAndMgExternalId(
+                    categoryId,
+                    normalizedYsExternalId,
+                    normalizedMgExternalId
+            ).isPresent()) {
+                return;
+            }
+            throw new SPException(
+                    HttpStatus.CONFLICT,
+                    "Manuel eslestirme kaydi cakisti, lutfen tekrar deneyin.",
+                    "MANUAL_MATCH_CONFLICT"
+            );
+        }
+    }
+
+    @Transactional
+    public void deleteManualMarketplaceMatch(
+            Long categoryId,
+            String ysExternalId,
+            String mgExternalId
+    ) {
+        requireCategory(categoryId);
+        String normalizedYsExternalId = normalizeExternalId(ysExternalId);
+        String normalizedMgExternalId = normalizeExternalId(mgExternalId);
+        if (isBlank(normalizedYsExternalId) || isBlank(normalizedMgExternalId)) {
+            throw new SPException(
+                    HttpStatus.BAD_REQUEST,
+                    "Manuel eslestirme silmek icin her iki external id zorunludur.",
+                    "MANUAL_MATCH_IDS_REQUIRED"
+            );
+        }
+        marketplaceManualMatchRepository.deleteByCategoryIdAndYsExternalIdAndMgExternalId(
+                categoryId,
+                normalizedYsExternalId,
+                normalizedMgExternalId
+        );
     }
 
     @Transactional(readOnly = true)
@@ -364,7 +469,10 @@ public class CategoryService {
                 candidate.basketDiscountPrice(),
                 candidate.campaignBuyQuantity(),
                 candidate.campaignPayQuantity(),
-                candidate.effectivePrice()
+                candidate.effectivePrice(),
+                candidate.unit(),
+                candidate.unitValue(),
+                candidate.packCount()
         );
     }
 
@@ -446,10 +554,16 @@ public class CategoryService {
         BigDecimal normalizedStoredEffectivePrice = MarketplacePriceNormalizer.normalizeForDisplay(
                 marketplaceProduct.getEffectivePrice()
         );
+        String resolvedName = resolveDisplayName(
+                latestName,
+                candidateData.fallbackName(),
+                brandName,
+                marketplaceProduct.getExternalId()
+        );
         return new MarketplaceProductEntryResponse(
                 marketplaceProduct.getMarketplace().getCode(),
                 marketplaceProduct.getExternalId(),
-                latestName.isBlank() ? candidateData.fallbackName() : latestName,
+                resolvedName,
                 latestProductId,
                 brandName,
                 imageUrl,
@@ -669,8 +783,111 @@ public class CategoryService {
         return value == null || value.isBlank();
     }
 
+    private String resolveDisplayName(
+            String latestName,
+            String fallbackName,
+            String brandName,
+            String externalId
+    ) {
+        if (!isBlank(latestName)) {
+            return latestName.trim();
+        }
+        if (!isBlank(fallbackName)) {
+            return fallbackName.trim();
+        }
+        if (!isBlank(brandName)) {
+            return brandName.trim();
+        }
+        return "Urun " + (externalId == null ? "" : externalId.trim());
+    }
+
+    private String normalizeExternalId(String value) {
+        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private List<MarketplaceProductMatchPairResponse> mergeManualMatches(
+            Long categoryId,
+            List<MarketplaceProductCandidateResponse> ys,
+            List<MarketplaceProductCandidateResponse> mg,
+            List<MarketplaceProductMatchPairResponse> autoPairs
+    ) {
+        if (categoryId == null) {
+            return autoPairs;
+        }
+        Map<String, MarketplaceProductCandidateResponse> ysByExternalId = ys.stream()
+                .collect(Collectors.toMap(
+                        candidate -> normalizeExternalId(candidate.externalId()),
+                        candidate -> candidate,
+                        (left, right) -> left,
+                        LinkedHashMap::new
+                ));
+        Map<String, MarketplaceProductCandidateResponse> mgByExternalId = mg.stream()
+                .collect(Collectors.toMap(
+                        candidate -> normalizeExternalId(candidate.externalId()),
+                        candidate -> candidate,
+                        (left, right) -> left,
+                        LinkedHashMap::new
+                ));
+        List<MarketplaceProductMatchPairResponse> manualPairs = marketplaceManualMatchRepository.findByCategoryId(categoryId)
+                .stream()
+                .map(manualMatch -> toManualMatchPair(manualMatch, ysByExternalId, mgByExternalId))
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        if (manualPairs.isEmpty()) {
+            return autoPairs;
+        }
+        Set<String> usedYs = manualPairs.stream()
+                .map(pair -> normalizeExternalId(pair.ys().externalId()))
+                .collect(Collectors.toSet());
+        Set<String> usedMg = manualPairs.stream()
+                .map(pair -> normalizeExternalId(pair.mg().externalId()))
+                .collect(Collectors.toSet());
+        List<MarketplaceProductMatchPairResponse> merged = new java.util.ArrayList<>(manualPairs);
+        for (MarketplaceProductMatchPairResponse autoPair : autoPairs) {
+            if (usedYs.contains(normalizeExternalId(autoPair.ys().externalId())) ||
+                    usedMg.contains(normalizeExternalId(autoPair.mg().externalId()))) {
+                continue;
+            }
+            merged.add(autoPair);
+        }
+        return merged;
+    }
+
+    private MarketplaceProductMatchPairResponse toManualMatchPair(
+            MarketplaceManualMatch manualMatch,
+            Map<String, MarketplaceProductCandidateResponse> ysByExternalId,
+            Map<String, MarketplaceProductCandidateResponse> mgByExternalId
+    ) {
+        MarketplaceProductCandidateResponse ys = ysByExternalId.get(normalizeExternalId(manualMatch.getYsExternalId()));
+        MarketplaceProductCandidateResponse mg = mgByExternalId.get(normalizeExternalId(manualMatch.getMgExternalId()));
+        if (ys == null || mg == null) {
+            return null;
+        }
+        MarketplaceProductMatchScoreResponse manualScore = new MarketplaceProductMatchScoreResponse(
+                1d,
+                1d,
+                1d,
+                1d,
+                1d,
+                1d,
+                1d,
+                1d,
+                1d
+        );
+        return new MarketplaceProductMatchPairResponse(ys, mg, manualScore, true, true);
+    }
+
+    private String normalizeMainCategory(String mainCategory) {
+        if (mainCategory == null) {
+            return null;
+        }
+        String trimmed = mainCategory.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
     private String candidateKey(String marketplaceCode, String externalId) {
-        return marketplaceCode + ":" + externalId;
+        String normalizedMarketplace = marketplaceCode == null ? "" : marketplaceCode.trim().toUpperCase(Locale.ROOT);
+        return normalizedMarketplace + ":" + normalizeExternalId(externalId);
     }
 
     private record LatestHistoryData(

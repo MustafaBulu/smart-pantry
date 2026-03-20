@@ -27,7 +27,7 @@ public class NeedListService {
     }
 
     @Transactional
-    public List<NeedListItemResponse> replaceAll(List<NeedListItemRequest> request) {
+    public synchronized List<NeedListItemResponse> replaceAll(List<NeedListItemRequest> request) {
         needListItemRepository.deleteAllInBatch();
         if (request == null || request.isEmpty()) {
             return List.of();

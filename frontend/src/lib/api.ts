@@ -104,8 +104,9 @@ const buildMarketplaceUrlCandidates = (marketplace: MarketplaceCode, path: strin
     directCandidates.push(withDirectBaseUrl(directBase, path));
   }
 
-  // If API_BASE already points to a single service, try without prefix too.
-  directCandidates.push(withDirectBaseUrl(API_BASE, path));
+  // Do not fall back to unprefixed API_BASE here.
+  // It can route YS requests to MG common endpoints (or vice versa),
+  // which breaks per-marketplace candidate lists in the UI.
 
   const inferredMode =
     GATEWAY_ONLY
@@ -152,6 +153,28 @@ class ApiHttpError extends Error {
     this.status = status;
   }
 }
+
+const parseApiErrorMessage = (data: unknown, status: number) => {
+  if (typeof data === "string") {
+    const trimmed = data.trim();
+    if (/^<!doctype html/i.test(trimmed) || /^<html/i.test(trimmed)) {
+      return `Sunucu hatasi (${status})`;
+    }
+    return trimmed || `Islem basarisiz (${status})`;
+  }
+  const payload = (data ?? {}) as Record<string, unknown>;
+  const raw =
+    (payload.message as string | undefined) ||
+    (payload.error as string | undefined) ||
+    (payload.code as string | undefined);
+  if (!raw || raw.trim().length === 0 || raw === "UNKNOWN_ERR") {
+    if (status >= 500) {
+      return `Sunucu hatasi (${status})`;
+    }
+    return `Islem basarisiz (${status})`;
+  }
+  return raw;
+};
 
 async function requestWithUrl<T>(url: string, options?: RequestInit) {
   const requestId = nextApiRequestId();
@@ -201,15 +224,7 @@ async function requestWithUrl<T>(url: string, options?: RequestInit) {
       });
       return [] as T;
     }
-    const errorData =
-      typeof data === "string" ? undefined : (data as Record<string, unknown>);
-    const message =
-      typeof data === "string"
-        ? data
-        : (errorData?.message as string | undefined) ||
-          (errorData?.error as string | undefined) ||
-          (errorData?.code as string | undefined) ||
-          `Islem basarisiz (${response.status})`;
+    const message = parseApiErrorMessage(data, response.status);
     logApi("warn", "request:error", {
       requestId,
       method,
@@ -248,7 +263,9 @@ export async function requestForMarketplace<T>(
     try {
       return await requestWithUrl<T>(url, options);
     } catch (error) {
-      const retryableHttpError = error instanceof ApiHttpError && error.status === 404;
+      const retryableHttpError =
+        error instanceof ApiHttpError &&
+        (error.status === 404 || error.status === 502 || error.status === 503 || error.status === 504);
       if (isNetworkFetchError(error) || retryableHttpError) {
         logApi("warn", "marketplace:retry-next-candidate", {
           marketplace,
@@ -287,10 +304,20 @@ export async function requestMergedArrayFromBoth<T>(
   options?: RequestInit,
   keyResolver?: (item: T) => string
 ) {
-  const [ys, mg] = await Promise.all([
+  const [ysResult, mgResult] = await Promise.allSettled([
     requestForMarketplace<T[]>("YS", path, options),
     requestForMarketplace<T[]>("MG", path, options),
   ]);
+  const ys = ysResult.status === "fulfilled" ? ysResult.value : [];
+  const mg = mgResult.status === "fulfilled" ? mgResult.value : [];
+  if (ys.length === 0 && mg.length === 0) {
+    const firstError =
+      ysResult.status === "rejected" ? ysResult.reason : mgResult.status === "rejected" ? mgResult.reason : null;
+    if (firstError instanceof Error) {
+      throw firstError;
+    }
+    throw new Error("Her iki marketplace istegi de basarisiz oldu.");
+  }
   const merged = [...ys, ...mg];
   if (!keyResolver) {
     return merged;
@@ -310,7 +337,8 @@ export async function request<T>(path: string, options?: RequestInit) {
   const directPrimaryUrl = withDirectBaseUrl(API_BASE, path);
   const shouldRetryWithFallback = (error: unknown) =>
     isNetworkFetchError(error) ||
-    (error instanceof ApiHttpError && error.status === 404);
+    (error instanceof ApiHttpError &&
+      (error.status === 404 || error.status === 502 || error.status === 503 || error.status === 504));
   if (GATEWAY_ONLY) {
     return requestWithUrl<T>(directPrimaryUrl, options);
   }

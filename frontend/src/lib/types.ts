@@ -1,4 +1,4 @@
-export type Category = { id: number; name: string };
+export type Category = { id: number; name: string; mainCategory?: string | null };
 
 export type ProductResponse = { id: number; name: string; price: number | null };
 
@@ -51,7 +51,6 @@ export type BulkAddResponse = {
 export type MarketplaceProductCandidateResponse = {
   marketplaceCode: string;
   externalId: string;
-  sku: string;
   name: string;
   brandName: string;
   imageUrl: string;
@@ -62,12 +61,14 @@ export type MarketplaceProductCandidateResponse = {
   campaignBuyQuantity: number | null;
   campaignPayQuantity: number | null;
   effectivePrice: number | null;
+  unit: string | null;
+  unitValue: number | null;
+  packCount: number | null;
 };
 
 export type MarketplaceProductEntryResponse = {
   marketplaceCode: string;
   externalId: string;
-  sku: string;
   name: string;
   productId: number | null;
   brandName: string;
@@ -79,6 +80,9 @@ export type MarketplaceProductEntryResponse = {
   campaignBuyQuantity: number | null;
   campaignPayQuantity: number | null;
   effectivePrice: number | null;
+  unit?: string | null;
+  unitValue?: number | null;
+  packCount?: number | null;
 };
 
 export type MarketplaceProductAddedResponse = {
@@ -96,6 +100,41 @@ export type MarketplaceProductAddedResponse = {
   campaignBuyQuantity: number | null;
   campaignPayQuantity: number | null;
   effectivePrice: number | null;
+  unit?: string | null;
+  unitValue?: number | null;
+  packCount?: number | null;
+};
+
+export type MarketplaceProductMatchScoreResponse = {
+  score: number;
+  nameScore: number;
+  coreNameScore: number;
+  phraseScore: number;
+  quantityScore: number;
+  brandScore: number;
+  imageScore: number;
+  priceScore: number;
+  profileScore: number;
+};
+
+export type MarketplaceProductMatchPairResponse = {
+  ys: MarketplaceProductCandidateResponse;
+  mg: MarketplaceProductCandidateResponse;
+  score: MarketplaceProductMatchScoreResponse;
+  autoLinkEligible: boolean;
+  manualMatch: boolean;
+};
+
+export type MarketplaceProductMatchRequest = {
+  categoryId?: number;
+  ys: MarketplaceProductCandidateResponse[];
+  mg: MarketplaceProductCandidateResponse[];
+  minScore?: number;
+};
+
+export type MarketplaceManualMatchRequest = {
+  ysExternalId: string;
+  mgExternalId: string;
 };
 
 export type BasketMinimumSettingsResponse = {

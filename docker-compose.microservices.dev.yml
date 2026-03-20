@@ -46,10 +46,10 @@ services:
       APP_MODULE: migros-service
       SPRING_BOOT_RUN_PROFILE: mg
       SPRING_PROFILES_ACTIVE: mg
+      SERVER_PORT: 8081
       DB_URL: jdbc:postgresql://db:5432/smart_pantry_mg
       DB_USERNAME: postgres
       DB_PASSWORD: root
-      SERVER_PORT: 8080
       EUREKA_DEFAULT_ZONE: http://discovery-server:8761/eureka/
       SPRINGDOC_SWAGGER_UI_CONFIG_URL: /mg/v3/api-docs/swagger-config
       SPRINGDOC_SWAGGER_UI_URL: /mg/v3/api-docs
@@ -86,10 +86,10 @@ services:
       APP_MODULE: yemeksepeti-service
       SPRING_BOOT_RUN_PROFILE: ys
       SPRING_PROFILES_ACTIVE: ys
+      SERVER_PORT: 8082
       DB_URL: jdbc:postgresql://db:5432/smart_pantry_ys
       DB_USERNAME: postgres
       DB_PASSWORD: root
-      SERVER_PORT: 8080
       EUREKA_DEFAULT_ZONE: http://discovery-server:8761/eureka/
       SPRINGDOC_SWAGGER_UI_CONFIG_URL: /ys/v3/api-docs/swagger-config
       SPRINGDOC_SWAGGER_UI_URL: /ys/v3/api-docs

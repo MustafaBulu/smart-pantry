@@ -1,7 +1,17 @@
-"use client";
+﻿﻿"use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import { createPortal } from "react-dom";
+import { useRouter } from "next/navigation";
 import { request, requestForMarketplace } from "@/lib/api";
 import {
   buildNicePriceAxis,
@@ -27,9 +37,12 @@ import Image from "next/image";
 import type {
   BasketMinimumSettingsResponse,
   Category,
+  MarketplaceManualMatchRequest,
   MarketplaceProductAddedResponse,
   MarketplaceProductCandidateResponse,
   MarketplaceProductEntryResponse,
+  MarketplaceProductMatchPairResponse,
+  MarketplaceProductMatchRequest,
   NeedListItemDto,
   PriceHistoryResponse,
   ProductResponse,
@@ -123,11 +136,16 @@ const CATEGORY_VISIBLE_COUNT = 3;
 const CATEGORY_PAGE_SIZE = 5;
 const LIST_VISIBLE_COUNT = 6;
 const MAX_OPPORTUNITY_TARGETS = 20;
-const MATCH_MIN_SCORE = 0.76;
+const MATCH_MIN_SCORE = 0.55;
 const CANDIDATE_DRAG_TYPE = "application/x-smart-pantry-candidate";
+const CATEGORY_DRAG_TYPE = "application/x-smart-pantry-category";
 const USER_SETTINGS_STORAGE_KEY = "smart-pantry:user-settings";
 const NEED_LIST_STORAGE_KEY = "smart-pantry:need-list";
 const OPPORTUNITY_FEED_STORAGE_KEY = "smart-pantry:opportunity-feed";
+const MAIN_CATEGORY_STORAGE_KEY = "smart-pantry:main-categories";
+const MAIN_CATEGORY_ASSIGNMENT_STORAGE_KEY = "smart-pantry:main-category-assignments";
+const UNCATEGORIZED_MAIN_CATEGORY_KEY = "__uncategorized__";
+const UNCATEGORIZED_MAIN_CATEGORY_LABEL = "Ana Kategori Yok";
 const DEFAULT_MIGROS_BASKET_THRESHOLD = 50;
 const DEFAULT_USER_SETTINGS: UserSettings = {
   migrosMoneyMember: false,
@@ -148,6 +166,14 @@ const parseNullableNumber = (value: unknown): number | null => {
   }
   return value;
 };
+
+const isReadRequestFailure = (error: unknown) => {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLocaleLowerCase("tr-TR");
+  return message.includes("failed to read request");
+};
 const ADDED_PRODUCTS_DROPZONE_CLASS =
   "mt-2 space-y-2 rounded-2xl border-2 border-dashed border-[#374151] bg-[#fff4e0] p-2 shadow-[0_12px_30px_-20px_rgba(217,119,6,0.7)]";
 
@@ -157,7 +183,7 @@ const normalizeProductName = (value: string) =>
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, "")
     .replace(/\d+([.,]\d+)?\s*(g|gr|kg|ml|l|lt)\b/g, " ")
-    .replace(/\b(li|lu|paket|adet|pet|sise|şişe)\b/g, " ")
+    .replace(/\b(li|lu|paket|adet|pet|sise|Ãƒâ€¦Ã…Â¸iÃƒâ€¦Ã…Â¸e)\b/g, " ")
     .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -167,29 +193,6 @@ const tokenSet = (value: string) =>
     normalizeProductName(value)
       .split(" ")
       .filter((token) => token.length > 1)
-  );
-
-const NAME_STOP_WORDS = new Set([
-  "ve",
-  "ile",
-  "icin",
-  "için",
-  "pet",
-  "paket",
-  "adet",
-  "sise",
-  "şişe",
-  "kutu",
-  "boy",
-  "mini",
-  "maxi",
-]);
-
-const coreTokenSet = (value: string) =>
-  new Set(
-    [...tokenSet(value)].filter(
-      (token) => !NAME_STOP_WORDS.has(token) && token.length > 2
-    )
   );
 
 const jaccardSimilarity = (left: Set<string>, right: Set<string>) => {
@@ -212,536 +215,62 @@ type QuantityInfo = {
   packCount: number | null;
 };
 
-const parseQuantityInfo = (name: string): QuantityInfo => {
-  const lower = name.toLocaleLowerCase("tr-TR");
-  const comboMatch = lower.match(/(\d+)\s*[xX]\s*(\d+(?:[.,]\d+)?)\s*(kg|gr|g|ml|lt|l)\b/);
-  const packMatch = lower.match(/(\d+)\s*['']?(li|lu|lü|pack|paket)\b/);
-  const amountMatch = lower.match(/(\d+(?:[.,]\d+)?)\s*(kg|gr|g|ml|lt|l)\b/);
-  let amount: number | null = null;
-  let unit: "g" | "ml" | null = null;
-  if (comboMatch) {
-    const rawAmount = Number.parseFloat(comboMatch[2].replace(",", "."));
-    const rawUnit = comboMatch[3];
-    if (!Number.isNaN(rawAmount)) {
-      if (rawUnit === "kg") {
-        amount = rawAmount * 1000;
-        unit = "g";
-      } else if (rawUnit === "gr" || rawUnit === "g") {
-        amount = rawAmount;
-        unit = "g";
-      } else if (rawUnit === "lt" || rawUnit === "l") {
-        amount = rawAmount * 1000;
-        unit = "ml";
-      } else if (rawUnit === "ml") {
-        amount = rawAmount;
-        unit = "ml";
-      }
-    }
-    return {
-      amount,
-      unit,
-      packCount: Number.parseInt(comboMatch[1], 10),
-    };
-  }
-  if (amountMatch) {
-    const rawAmount = Number.parseFloat(amountMatch[1].replace(",", "."));
-    const rawUnit = amountMatch[2];
-    if (!Number.isNaN(rawAmount)) {
-      if (rawUnit === "kg") {
-        amount = rawAmount * 1000;
-        unit = "g";
-      } else if (rawUnit === "gr" || rawUnit === "g") {
-        amount = rawAmount;
-        unit = "g";
-      } else if (rawUnit === "lt" || rawUnit === "l") {
-        amount = rawAmount * 1000;
-        unit = "ml";
-      } else if (rawUnit === "ml") {
-        amount = rawAmount;
-        unit = "ml";
-      }
-    }
-  }
-  return {
-    amount,
-    unit,
-    packCount: packMatch ? Number.parseInt(packMatch[1], 10) : null,
-  };
+type ProductWithQuantityMeta = {
+  name: string;
+  unit?: string | null;
+  unitValue?: number | null;
+  packCount?: number | null;
 };
 
-const compareQuantity = (leftName: string, rightName: string) => {
-  const left = parseQuantityInfo(leftName);
-  const right = parseQuantityInfo(rightName);
-  if ((left.packCount === null) !== (right.packCount === null)) {
-    return { compatible: false, score: 0 };
-  }
-  if (left.packCount !== null && right.packCount !== null && left.packCount !== right.packCount) {
-    return { compatible: false, score: 0 };
-  }
-  if ((left.unit === null) !== (right.unit === null)) {
-    return { compatible: false, score: 0 };
-  }
-  if ((left.amount === null) !== (right.amount === null)) {
-    return { compatible: false, score: 0 };
-  }
-  if (left.unit && right.unit) {
-    if (left.unit !== right.unit) {
-      return { compatible: false, score: 0 };
-    }
-    if (left.amount !== null && right.amount !== null) {
-      const ratio = Math.min(left.amount, right.amount) / Math.max(left.amount, right.amount);
-      if (ratio < 0.98) {
-        return { compatible: false, score: 0 };
-      }
-      return { compatible: true, score: 1 };
-    }
-  }
-  return { compatible: true, score: 0.85 };
-};
-
-const imageFingerprint = (url: string) => {
-  if (!url) {
+const formatQuantityTag = (quantity: QuantityInfo) => {
+  if (quantity.amount === null || !quantity.unit) {
     return "";
   }
-  const withoutQuery = url.split("?")[0];
-  const fileName = withoutQuery.split("/").pop() ?? "";
-  return fileName.replace(/\.[a-z0-9]+$/i, "").toLocaleLowerCase("tr-TR");
+  const amountText = Number.isInteger(quantity.amount)
+    ? `${quantity.amount}`
+    : `${quantity.amount}`.replace(/\.0+$/, "");
+  return `${amountText} ${quantity.unit}`;
 };
 
-const imageSimilarity = (leftUrl: string, rightUrl: string) => {
-  const leftRaw = (leftUrl ?? "").trim();
-  const rightRaw = (rightUrl ?? "").trim();
-  if (!leftRaw || !rightRaw) {
-    return 0;
-  }
-  if (leftRaw === rightRaw) {
-    return 1;
-  }
-  const left = imageFingerprint(leftRaw);
-  const right = imageFingerprint(rightRaw);
-  if (!left || !right) {
-    return 0;
-  }
-  if (left === right) {
-    return 1;
-  }
-  if (left.includes(right) || right.includes(left)) {
-    return 0.9;
-  }
-  const leftTokens = new Set(left.split(/[^a-z0-9]+/).filter((token) => token.length > 2));
-  const rightTokens = new Set(right.split(/[^a-z0-9]+/).filter((token) => token.length > 2));
-  const tokenScore = jaccardSimilarity(leftTokens, rightTokens);
-  if (tokenScore > 0) {
-    return Math.min(0.85, 0.45 + tokenScore * 0.4);
-  }
-  return left.slice(0, 10) === right.slice(0, 10) ? 0.6 : 0;
+const getProductQuantityText = (item: ProductWithQuantityMeta) => {
+  const rawUnit = (item.unit ?? "").toLocaleLowerCase("tr-TR").trim();
+  const normalizedUnit: "g" | "ml" | null =
+    rawUnit === "g" || rawUnit === "gr" || rawUnit === "kg"
+      ? "g"
+      : rawUnit === "ml" || rawUnit === "l" || rawUnit === "lt"
+        ? "ml"
+        : null;
+  const quantity: QuantityInfo = {
+    amount:
+      normalizedUnit && typeof item.unitValue === "number" && Number.isFinite(item.unitValue) && item.unitValue > 0
+        ? item.unitValue
+        : null,
+    unit: normalizedUnit,
+    packCount:
+      typeof item.packCount === "number" && Number.isFinite(item.packCount) && item.packCount > 0
+        ? item.packCount
+        : null,
+  };
+  const quantityTag = formatQuantityTag(quantity);
+  return quantityTag || null;
 };
 
-const brandSimilarity = (leftBrand: string, rightBrand: string) => {
-  const left = leftBrand.trim().toLocaleLowerCase("tr-TR");
-  const right = rightBrand.trim().toLocaleLowerCase("tr-TR");
-  if (!left || !right) {
-    return 0.5;
+const formatProductNameWithQuantity = (item: ProductWithQuantityMeta) => {
+  const quantityTag = getProductQuantityText(item);
+  if (!quantityTag) {
+    return item.name;
   }
-  return left === right ? 1 : 0;
+  return `${item.name} (${quantityTag})`;
 };
 
 const candidateKey = (item: MarketplaceProductCandidateResponse) =>
   `${item.marketplaceCode}:${item.externalId}`;
-
-type CandidateMatchScore = {
-  score: number;
-  nameScore: number;
-  coreNameScore: number;
-  phraseScore: number;
-  quantityScore: number;
-  brandScore: number;
-  imageScore: number;
-  priceScore: number;
-  profileScore: number;
-};
-
-type CandidatePair = {
-  ys: MarketplaceProductCandidateResponse;
-  mg: MarketplaceProductCandidateResponse;
-  score: CandidateMatchScore;
-};
-
-const isStrongNameMatch = (
-  source: MarketplaceProductCandidateResponse,
-  target: MarketplaceProductCandidateResponse
-) => normalizeProductName(source.name || "") === normalizeProductName(target.name || "");
-
-const shouldAutoLinkCandidates = (
-  match: {
-    score: number;
-    nameScore: number;
-    coreNameScore: number;
-    phraseScore: number;
-    quantityScore: number;
-    brandScore: number;
-    imageScore: number;
-    priceScore: number;
-    profileScore: number;
-  },
-  source: MarketplaceProductCandidateResponse,
-  target: MarketplaceProductCandidateResponse
-) => {
-  if (
-    isStrongNameMatch(source, target) &&
-    match.quantityScore >= 0.95 &&
-    match.brandScore >= 0.7 &&
-    match.priceScore >= 0.45 &&
-    match.profileScore >= 0.65 &&
-    match.score >= 0.8
-  ) {
-    return true;
-  }
-  return (
-    match.score >= 0.82 &&
-    match.nameScore >= 0.6 &&
-    match.coreNameScore >= 0.52 &&
-    match.phraseScore >= 0.55 &&
-    match.quantityScore >= 0.95 &&
-    match.brandScore >= 0.6 &&
-    match.priceScore >= 0.4 &&
-    match.profileScore >= 0.7
-  );
-};
-
-const normalizeMatchText = (value: string) =>
-  value
-    .toLocaleLowerCase("tr-TR")
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
-    .replace(/\s+/g, " ")
-    .trim();
-
-const GENERIC_BRAND_TOKENS = new Set([
-  "sut",
-  "icme",
-  "uht",
-  "pastorize",
-  "gunluk",
-  "yagli",
-  "organik",
-  "proteinli",
-  "laktozsuz",
-]);
-
-const normalizeBrand = (brand: string) => {
-  const normalized = normalizeMatchText(brand);
-  if (!normalized || normalized === "marka yok") {
-    return "";
-  }
-  return normalized;
-};
-
-const inferBrand = (candidate: MarketplaceProductCandidateResponse) => {
-  const explicit = normalizeBrand(candidate.brandName || "");
-  if (explicit) {
-    return explicit;
-  }
-  const firstToken = normalizeMatchText(candidate.name || "").split(" ")[0] ?? "";
-  if (!firstToken || GENERIC_BRAND_TOKENS.has(firstToken)) {
-    return "";
-  }
-  return firstToken;
-};
-
-const leadingPhraseScore = (leftName: string, rightName: string) => {
-  const left = normalizeMatchText(leftName).split(" ").filter(Boolean);
-  const right = normalizeMatchText(rightName).split(" ").filter(Boolean);
-  if (left.length === 0 || right.length === 0) {
-    return 0;
-  }
-  const left1 = left[0];
-  const right1 = right[0];
-  const left2 = left.slice(0, 2).join(" ");
-  const right2 = right.slice(0, 2).join(" ");
-  if (left2 && right2 && left2 === right2) {
-    return 1;
-  }
-  if (left1 === right1) {
-    return 0.9;
-  }
-  if (left1.startsWith(right1) || right1.startsWith(left1)) {
-    return 0.7;
-  }
-  const leftHead = new Set(left.slice(0, 3));
-  const rightHead = new Set(right.slice(0, 3));
-  return jaccardSimilarity(leftHead, rightHead) * 0.7;
-};
-
-const phraseSimilarity = (leftName: string, rightName: string) => {
-  const left = normalizeProductName(leftName).split(" ").filter((token) => token.length > 1);
-  const right = normalizeProductName(rightName).split(" ").filter((token) => token.length > 1);
-  if (left.length < 2 || right.length < 2) {
-    return 0;
-  }
-  const leftBigrams = new Set<string>();
-  const rightBigrams = new Set<string>();
-  for (let i = 0; i < left.length - 1; i += 1) {
-    leftBigrams.add(`${left[i]} ${left[i + 1]}`);
-  }
-  for (let i = 0; i < right.length - 1; i += 1) {
-    rightBigrams.add(`${right[i]} ${right[i + 1]}`);
-  }
-  return jaccardSimilarity(leftBigrams, rightBigrams);
-};
-
-const resolveComparablePrice = (candidate: MarketplaceProductCandidateResponse) => {
-  const candidates = [
-    candidate.effectivePrice,
-    candidate.basketDiscountPrice,
-    candidate.moneyPrice,
-    candidate.price,
-  ].filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0);
-  if (candidates.length === 0) {
-    return null;
-  }
-  return Math.min(...candidates);
-};
-
-const comparePriceConsistency = (
-  source: MarketplaceProductCandidateResponse,
-  target: MarketplaceProductCandidateResponse
-) => {
-  const left = resolveComparablePrice(source);
-  const right = resolveComparablePrice(target);
-  if (left === null || right === null) {
-    return { compatible: true, score: 0.55 };
-  }
-  const ratio = Math.max(left, right) / Math.min(left, right);
-  if (ratio > 2.2) {
-    return { compatible: false, score: 0 };
-  }
-  if (ratio <= 1.15) {
-    return { compatible: true, score: 1 };
-  }
-  if (ratio <= 1.35) {
-    return { compatible: true, score: 0.85 };
-  }
-  if (ratio <= 1.6) {
-    return { compatible: true, score: 0.65 };
-  }
-  if (ratio <= 2.0) {
-    return { compatible: true, score: 0.45 };
-  }
-  return { compatible: true, score: 0.25 };
-};
-
-type MatchProfile = {
-  lactoseFree: boolean;
-  organic: boolean;
-  protein: boolean;
-  goatMilk: boolean;
-  flavor: string | null;
-  fatPercent: number | null;
-  fatClass: "LOW" | "HALF" | "FULL" | null;
-  uht: boolean;
-  pasteurized: boolean;
-  daily: boolean;
-  bottle: boolean;
-};
-
-const parseFatPercent = (normalizedText: string) => {
-  const match = normalizedText.match(/%?\s*(\d+(?:[.,]\d+)?)\s*yag/);
-  if (!match) {
-    return null;
-  }
-  const parsed = Number.parseFloat(match[1].replace(",", "."));
-  return Number.isFinite(parsed) ? parsed : null;
-};
-
-const extractMatchProfile = (candidate: MarketplaceProductCandidateResponse): MatchProfile => {
-  const text = normalizeMatchText(candidate.name || "");
-  const fatPercent = parseFatPercent(text);
-  return {
-    lactoseFree: text.includes("laktozsuz") || text.includes("rahat"),
-    organic: text.includes("organik"),
-    protein: text.includes("protein"),
-    goatMilk: text.includes("keci"),
-    flavor: text.includes("kakaolu")
-      ? "kakao"
-      : text.includes("cilekli")
-        ? "cilek"
-        : text.includes("muzlu")
-          ? "muz"
-          : text.includes("latte")
-            ? "latte"
-            : text.includes("kahveli")
-              ? "kahve"
-              : null,
-    fatPercent,
-    fatClass: text.includes("tam yagli")
-      ? "FULL"
-      : text.includes("yarim yagli")
-        ? "HALF"
-        : text.includes("az yagli") || text.includes("0,5") || text.includes("0.5")
-          ? "LOW"
-          : null,
-    uht: text.includes("uht"),
-    pasteurized: text.includes("pastorize"),
-    daily: text.includes("gunluk"),
-    bottle: text.includes("sise"),
-  };
-};
-
-const resolveFatScore = (left: MatchProfile, right: MatchProfile) => {
-  if (left.fatPercent !== null && right.fatPercent !== null) {
-    const diff = Math.abs(left.fatPercent - right.fatPercent);
-    if (diff > 0.8) {
-      return { compatible: false, score: 0 };
-    }
-    if (diff <= 0.2) {
-      return { compatible: true, score: 1 };
-    }
-    if (diff <= 0.5) {
-      return { compatible: true, score: 0.75 };
-    }
-    return { compatible: true, score: 0.5 };
-  }
-  if (left.fatClass && right.fatClass) {
-    return left.fatClass === right.fatClass
-      ? { compatible: true, score: 1 }
-      : { compatible: false, score: 0 };
-  }
-  return { compatible: true, score: 0.6 };
-};
-
-const compareProfiles = (left: MatchProfile, right: MatchProfile) => {
-  if (left.goatMilk !== right.goatMilk) {
-    return { compatible: false, score: 0 };
-  }
-  if (left.lactoseFree !== right.lactoseFree) {
-    return { compatible: false, score: 0 };
-  }
-  if (left.organic !== right.organic) {
-    return { compatible: false, score: 0 };
-  }
-  if (left.protein !== right.protein) {
-    return { compatible: false, score: 0 };
-  }
-  if ((left.flavor === null) !== (right.flavor === null)) {
-    return { compatible: false, score: 0 };
-  }
-  if (left.flavor !== null && right.flavor !== null && left.flavor !== right.flavor) {
-    return { compatible: false, score: 0 };
-  }
-
-  const fat = resolveFatScore(left, right);
-  if (!fat.compatible) {
-    return { compatible: false, score: 0 };
-  }
-
-  let processScore = 0.6;
-  if (left.uht && right.uht) {
-    processScore += 0.15;
-  }
-  if (left.pasteurized && right.pasteurized) {
-    processScore += 0.15;
-  }
-  if (left.daily && right.daily) {
-    processScore += 0.1;
-  }
-  if (left.bottle && right.bottle) {
-    processScore += 0.1;
-  }
-  processScore = Math.min(processScore, 1);
-  return { compatible: true, score: (fat.score * 0.65) + (processScore * 0.35) };
-};
-
-const scoreCandidatePair = (
-  source: MarketplaceProductCandidateResponse,
-  target: MarketplaceProductCandidateResponse
-): CandidateMatchScore | null => {
-  const nameScore = jaccardSimilarity(tokenSet(source.name || ""), tokenSet(target.name || ""));
-  const coreNameScore = jaccardSimilarity(
-    coreTokenSet(source.name || ""),
-    coreTokenSet(target.name || "")
-  );
-  const phraseScore = Math.max(
-    leadingPhraseScore(source.name || "", target.name || ""),
-    phraseSimilarity(source.name || "", target.name || "")
-  );
-  if ((nameScore < 0.55 && coreNameScore < 0.45) || phraseScore < 0.35) {
-    return null;
-  }
-  const explicitSourceBrand = normalizeBrand(source.brandName || "");
-  const explicitTargetBrand = normalizeBrand(target.brandName || "");
-  if (explicitSourceBrand && explicitTargetBrand && explicitSourceBrand !== explicitTargetBrand) {
-    return null;
-  }
-  const inferredSourceBrand = inferBrand(source);
-  const inferredTargetBrand = inferBrand(target);
-  const brandScore = inferredSourceBrand && inferredTargetBrand
-    ? inferredSourceBrand === inferredTargetBrand
-      ? 1
-      : 0.1
-    : brandSimilarity(source.brandName || "", target.brandName || "");
-  if (brandScore < 0.1) {
-    return null;
-  }
-  const quantity = compareQuantity(source.name || "", target.name || "");
-  if (!quantity.compatible) {
-    return null;
-  }
-  const price = comparePriceConsistency(source, target);
-  if (!price.compatible) {
-    return null;
-  }
-  const profile = compareProfiles(extractMatchProfile(source), extractMatchProfile(target));
-  if (!profile.compatible) {
-    return null;
-  }
-  const imageScore = imageSimilarity(source.imageUrl || "", target.imageUrl || "");
-  const score =
-    nameScore * 0.18 +
-    coreNameScore * 0.14 +
-    phraseScore * 0.18 +
-    quantity.score * 0.2 +
-    brandScore * 0.14 +
-    imageScore * 0.08 +
-    price.score * 0.04 +
-    profile.score * 0.04;
-  return {
-    score,
-    nameScore,
-    coreNameScore,
-    phraseScore,
-    quantityScore: quantity.score,
-    brandScore,
-    imageScore,
-    priceScore: price.score,
-    profileScore: profile.score,
-  };
-};
-
-const entryToCandidate = (
-  item: MarketplaceProductEntryResponse
-): MarketplaceProductCandidateResponse => ({
-  marketplaceCode: item.marketplaceCode,
-  externalId: item.externalId,
-  sku: item.sku,
-  name: item.name,
-  brandName: item.brandName,
-  imageUrl: item.imageUrl,
-  price: item.price,
-  moneyPrice: item.moneyPrice,
-  basketDiscountThreshold: item.basketDiscountThreshold,
-  basketDiscountPrice: item.basketDiscountPrice,
-  campaignBuyQuantity: item.campaignBuyQuantity,
-  campaignPayQuantity: item.campaignPayQuantity,
-  effectivePrice: item.effectivePrice,
-});
 
 const addedToCandidate = (
   item: MarketplaceProductAddedResponse
 ): MarketplaceProductCandidateResponse => ({
   marketplaceCode: item.marketplaceCode,
   externalId: item.externalId,
-  sku: "",
   name: item.name,
   brandName: item.brandName,
   imageUrl: item.imageUrl,
@@ -752,6 +281,9 @@ const addedToCandidate = (
   campaignBuyQuantity: item.campaignBuyQuantity,
   campaignPayQuantity: item.campaignPayQuantity,
   effectivePrice: item.effectivePrice,
+  unit: item.unit ?? null,
+  unitValue: item.unitValue ?? null,
+  packCount: item.packCount ?? null,
 });
 
 const resolveCandidateDisplayPrice = (item: MarketplaceProductCandidateResponse): number =>
@@ -776,36 +308,6 @@ const resolveEntryDisplayPrice = (item: MarketplaceProductEntryResponse): number
     )
   );
 
-const buildMarketplacePairs = (
-  ys: MarketplaceProductCandidateResponse[],
-  mg: MarketplaceProductCandidateResponse[],
-  minScore: number
-) => {
-  const usedMgKeys = new Set<string>();
-  const pairs: CandidatePair[] = [];
-  for (const ysItem of ys) {
-    let bestMatch: { item: MarketplaceProductCandidateResponse; score: CandidateMatchScore } | null =
-      null;
-    for (const mgItem of mg) {
-      const mgKey = candidateKey(mgItem);
-      if (usedMgKeys.has(mgKey)) {
-        continue;
-      }
-      const scored = scoreCandidatePair(ysItem, mgItem);
-      if (!scored) {
-        continue;
-      }
-      if (!bestMatch || scored.score > bestMatch.score.score) {
-        bestMatch = { item: mgItem, score: scored };
-      }
-    }
-    if (bestMatch && bestMatch.score.score >= minScore) {
-      usedMgKeys.add(candidateKey(bestMatch.item));
-      pairs.push({ ys: ysItem, mg: bestMatch.item, score: bestMatch.score });
-    }
-  }
-  return pairs;
-};
 const getNoticeToneClass = (tone: Notice["tone"]) => {
   if (tone === "success") {
     return "border-emerald-200 bg-emerald-50 text-emerald-800";
@@ -833,6 +335,33 @@ type SuggestedProductsProps = Readonly<{
     candidate: MarketplaceProductCandidateResponse,
     isMatched: boolean
   ) => void;
+  manualMatchSource: {
+    categoryId: number;
+    marketplaceCode: MarketplaceCode;
+    externalId: string;
+  } | null;
+  manualMatchBusy: boolean;
+  onStartManualMatch: (
+    category: Category,
+    candidate: MarketplaceProductCandidateResponse
+  ) => void;
+  onSelectManualMatchTarget: (
+    category: Category,
+    candidate: MarketplaceProductCandidateResponse
+  ) => void;
+  onRemoveManualMatch: (
+    category: Category,
+    candidate: MarketplaceProductCandidateResponse
+  ) => void;
+  isNeedProductAddedForCandidate: (
+    category: Category,
+    candidate: MarketplaceProductCandidateResponse
+  ) => boolean;
+  onToggleNeedForCandidate: (
+    category: Category,
+    candidate: MarketplaceProductCandidateResponse
+  ) => void;
+  suggestedMatchPairByKey: Record<string, MarketplaceProductMatchPairResponse>;
   onToggleList: (key: string) => void;
   onDragStartCandidate: (
     event: React.DragEvent<HTMLDivElement>,
@@ -853,6 +382,14 @@ function SuggestedProducts({
   addedCandidateIds,
   expandedLists,
   onAddCandidate,
+  manualMatchSource,
+  manualMatchBusy,
+  onStartManualMatch,
+  onSelectManualMatchTarget,
+  onRemoveManualMatch,
+  isNeedProductAddedForCandidate,
+  onToggleNeedForCandidate,
+  suggestedMatchPairByKey,
   onToggleList,
   onDragStartCandidate,
 }: SuggestedProductsProps) {
@@ -874,8 +411,19 @@ function SuggestedProducts({
       <>
         {visibleSectionCandidates.map((item, index) => {
           const itemKey = candidateKey(item);
+          const matchedPair = suggestedMatchPairByKey[itemKey];
           const isAdded = addedCandidateIds.has(itemKey);
           const isMatched = matchedCandidateKeys.has(itemKey);
+          const isManualMatched = Boolean(matchedPair?.manualMatch);
+          const isMatchSource =
+            manualMatchSource?.categoryId === category.id &&
+            manualMatchSource.marketplaceCode === marketplaceCode &&
+            manualMatchSource.externalId === item.externalId;
+          const isNeedAdded = isNeedProductAddedForCandidate(category, item);
+          const isManualTargetSelectable =
+            manualMatchSource?.categoryId === category.id &&
+            manualMatchSource.marketplaceCode !== marketplaceCode &&
+            !isAdded;
           const matchedTone =
             marketplaceCode === "YS"
               ? "border-rose-300 bg-rose-50/70"
@@ -883,16 +431,37 @@ function SuggestedProducts({
           return (
             <div
               key={`${item.externalId}-${index}`}
+              role={isManualTargetSelectable ? "button" : undefined}
+              tabIndex={isManualTargetSelectable ? 0 : undefined}
               className={`relative grid h-[92px] grid-cols-[40px_minmax(0,1fr)_36px] items-center gap-3 rounded-2xl border border-black/5 bg-[#f9f4ee] px-3 py-2 ${
                 isMatched ? matchedTone : ""
               } ${
+                isMatchSource ? "ring-2 ring-[#d97706] ring-offset-1 ring-offset-white" : ""
+              } ${
                 isAdded ? "opacity-40" : "cursor-grab active:cursor-grabbing"
+              } ${
+                isManualTargetSelectable ? "cursor-pointer border-[#d97706] bg-amber-50/60" : ""
               }`}
               draggable={!isAdded && !candidateBusy}
               onDragStart={(event) => onDragStartCandidate(event, item)}
+              onClick={() => {
+                if (!isManualTargetSelectable || manualMatchBusy) {
+                  return;
+                }
+                onSelectManualMatchTarget(category, item);
+              }}
+              onKeyDown={(event) => {
+                if (!isManualTargetSelectable || manualMatchBusy) {
+                  return;
+                }
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onSelectManualMatchTarget(category, item);
+                }
+              }}
             >
               {isMatched && (
-                <span className="absolute right-2 top-1 inline-flex items-center rounded-full border border-emerald-300 bg-emerald-100 p-1 text-[10px] font-semibold text-emerald-800">
+                <span className="absolute left-2 top-1 inline-flex items-center rounded-full border border-emerald-300 bg-emerald-100 p-1 text-[10px] font-semibold text-emerald-800">
                   <svg viewBox="0 0 16 16" className="h-3 w-3" aria-hidden>
                     <path
                       d="M6.2 5.2 4.7 3.7a2.4 2.4 0 1 0-3.4 3.4l1.5 1.5a2.4 2.4 0 0 0 3.4 0m3.6-2.4 1.5-1.5a2.4 2.4 0 1 1 3.4 3.4l-1.5 1.5a2.4 2.4 0 0 1-3.4 0M5.1 10.9l5.8-5.8"
@@ -907,7 +476,7 @@ function SuggestedProducts({
               )}
               <div className="relative h-10 w-10 overflow-hidden rounded-xl border border-black/10 bg-white">
                 {item.imageUrl ? (
-                  <Image src={item.imageUrl} alt={item.name} fill sizes="40px" className="object-cover" />
+                  <Image src={item.imageUrl} alt={item.name} fill sizes="40px" className="object-cover" unoptimized />
                 ) : (
                   <div className="flex h-full w-full items-center justify-center text-[10px] text-[#6b655c]">
                     Gorsel yok
@@ -918,6 +487,11 @@ function SuggestedProducts({
                 <p className="truncate text-sm font-semibold text-[#111]">
                   {item.name}
                 </p>
+                {getProductQuantityText(item) && (
+                  <p className="truncate text-[11px] text-[#6b655c]">
+                    {getProductQuantityText(item)}
+                  </p>
+                )}
                 <p className="truncate text-xs text-[#554f47]">
                   {item.brandName || "Marka yok"}
                   {formatMarketplacePriceSuffix(
@@ -975,17 +549,95 @@ function SuggestedProducts({
                   </div>
                 )}
               </div>
-              {isAdded ? null : (
+              <div className="flex flex-col items-center gap-1">
+                {!isAdded && (
+                  <button
+                    type="button"
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#d97706] text-lg font-semibold text-white transition hover:bg-[#b45309]"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onAddCandidate(category, item, isMatched);
+                    }}
+                    disabled={candidateBusy}
+                    title="Urun ekle"
+                  >
+                    +
+                  </button>
+                )}
                 <button
                   type="button"
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#d97706] text-lg font-semibold text-white transition hover:bg-[#b45309]"
-                  onClick={() => onAddCandidate(category, item, isMatched)}
-                  disabled={candidateBusy}
-                  title="Urun ekle"
+                  className={`inline-flex h-7 w-7 items-center justify-center rounded-full border transition disabled:opacity-50 ${
+                    isNeedAdded
+                      ? "border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-100"
+                      : "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                  }`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onToggleNeedForCandidate(category, item);
+                  }}
+                  disabled={candidateBusy || manualMatchBusy}
+                  title={isNeedAdded ? "Ihtiyactan cikar" : "Ihtiyaca ekle"}
                 >
-                  +
+                  <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden>
+                    {isNeedAdded ? (
+                      <path
+                        d="M2.2 8h11.6"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                        strokeLinecap="round"
+                      />
+                    ) : (
+                      <path
+                        d="M2.2 8h11.6M8 2.2v11.6"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                        strokeLinecap="round"
+                      />
+                    )}
+                  </svg>
                 </button>
-              )}
+                <button
+                  type="button"
+                  className={`inline-flex h-7 w-7 items-center justify-center rounded-full border transition hover:bg-amber-100 disabled:opacity-50 ${
+                    isManualMatched
+                      ? "border-rose-200 bg-rose-50 text-rose-700"
+                      : "border-amber-200 bg-amber-50 text-amber-700"
+                  }`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    if (isManualMatched) {
+                      onRemoveManualMatch(category, item);
+                      return;
+                    }
+                    onStartManualMatch(category, item);
+                  }}
+                  disabled={candidateBusy || manualMatchBusy}
+                  title={isManualMatched ? "Eslestirmeyi sil" : "Eslestirme icin sec"}
+                >
+                  <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden>
+                    {isManualMatched ? (
+                      <path
+                        d="M3.2 3.2l9.6 9.6M12.8 3.2l-9.6 9.6"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                        strokeLinecap="round"
+                      />
+                    ) : (
+                      <path
+                        d="M6.2 5.2 4.7 3.7a2.4 2.4 0 1 0-3.4 3.4l1.5 1.5a2.4 2.4 0 0 0 3.4 0m3.6-2.4 1.5-1.5a2.4 2.4 0 1 1 3.4 3.4l-1.5 1.5a2.4 2.4 0 0 1-3.4 0M5.1 10.9l5.8-5.8"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.4"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    )}
+                  </svg>
+                </button>
+              </div>
             </div>
           );
         })}
@@ -1017,8 +669,22 @@ function SuggestedProducts({
 }
 
 export default function HomePage() {
+  const router = useRouter();
   const [categories, setCategories] = useState<Category[]>([]);
   const [categoryName, setCategoryName] = useState("");
+  const [mainCategoryName, setMainCategoryName] = useState("");
+  const [customMainCategories, setCustomMainCategories] = useState<string[]>([]);
+  const [mainCategoryAssignments, setMainCategoryAssignments] = useState<Record<string, string | null>>({});
+  const [showMainCategoryModal, setShowMainCategoryModal] = useState(false);
+  const [showInlineMainCategoryInput, setShowInlineMainCategoryInput] = useState(false);
+  const [newMainCategoryDraft, setNewMainCategoryDraft] = useState("");
+  const [renameMainCategorySource, setRenameMainCategorySource] = useState("");
+  const [renameMainCategoryTarget, setRenameMainCategoryTarget] = useState("");
+  const [selectedMainCategoryFilterKey, setSelectedMainCategoryFilterKey] = useState<string | null>(null);
+  const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
+  const [editingCategoryName, setEditingCategoryName] = useState("");
+  const [draggedCategoryId, setDraggedCategoryId] = useState<number | null>(null);
+  const [activeMainCategoryDropKey, setActiveMainCategoryDropKey] = useState<string | null>(null);
   const [categoryFilterQuery, setCategoryFilterQuery] = useState("");
   const [showAddCategory, setShowAddCategory] = useState(false);
   const [showAllCategories, setShowAllCategories] = useState(false);
@@ -1066,15 +732,64 @@ export default function HomePage() {
   const [isInfoSectionCollapsed, setIsInfoSectionCollapsed] = useState(false);
   const [totalMarketplaceProductCount, setTotalMarketplaceProductCount] = useState(0);
   const [matchedMarketplaceProductCount, setMatchedMarketplaceProductCount] = useState(0);
+  const [suggestedMatchPairs, setSuggestedMatchPairs] = useState<MarketplaceProductMatchPairResponse[]>([]);
+  const [manualMatchBusy, setManualMatchBusy] = useState(false);
+  const [manualMatchSource, setManualMatchSource] = useState<{
+    categoryId: number;
+    marketplaceCode: MarketplaceCode;
+    externalId: string;
+    name: string;
+  } | null>(null);
   const [userSettings, setUserSettings] = useState<UserSettings>(
     DEFAULT_USER_SETTINGS
   );
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
+  const [pendingNavigationPath, setPendingNavigationPath] = useState<"/needs" | "/basket" | null>(
+    null
+  );
   const settingsMenuTimeoutRef = useRef<number | null>(null);
   const [headerActionsEl, setHeaderActionsEl] = useState<HTMLElement | null>(null);
   const addFlowLocksRef = useRef<Set<string>>(new Set());
   const marketplaceCategoryIdCacheRef = useRef<Record<string, number | null>>({});
   const marketplaceCategoryIdInFlightRef = useRef<Record<string, Promise<number | null>>>({});
+
+  const navigateToPage = useCallback(
+    (pathname: "/needs" | "/basket") => {
+      setShowProductInfoModal(false);
+      setShowAddCategory(false);
+      setSelectedAddedProduct(null);
+      setSelectedProductCategory(null);
+      if (expandedCategoryId !== null) {
+        setPendingNavigationPath(pathname);
+        setExpandedCategoryId(null);
+        return;
+      }
+      router.push(pathname);
+    },
+    [expandedCategoryId, router]
+  );
+
+  useEffect(() => {
+    if (pendingNavigationPath === null) {
+      return;
+    }
+    if (expandedCategoryId !== null) {
+      return;
+    }
+    router.push(pendingNavigationPath);
+    setPendingNavigationPath(null);
+  }, [expandedCategoryId, pendingNavigationPath, router]);
+
+  const mainCategoryOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [...customMainCategories, ...categories.map((category) => (category.mainCategory ?? "").trim())]
+            .filter((value) => value.length > 0)
+        )
+      ).sort((left, right) => left.localeCompare(right, "tr-TR")),
+    [categories, customMainCategories]
+  );
 
   const clearSettingsMenuTimeout = () => {
     if (settingsMenuTimeoutRef.current !== null) {
@@ -1112,12 +827,54 @@ export default function HomePage() {
     };
   }, []);
 
-  const loadCategories = async () => {
+  const loadCategories = useCallback(async () => {
     const data = await request<Category[]>("/categories");
-    setCategories(data);
+    const merged = data.map((item) => {
+      const override = mainCategoryAssignments[String(item.id)];
+      if (override === undefined) {
+        return item;
+      }
+      return { ...item, mainCategory: override };
+    });
+    setCategories(merged);
     marketplaceCategoryIdCacheRef.current = {};
     marketplaceCategoryIdInFlightRef.current = {};
-  };
+  }, [mainCategoryAssignments]);
+
+  const matchMarketplacePairs = useCallback(
+    async (
+      categoryId: number | undefined,
+      ys: MarketplaceProductCandidateResponse[],
+      mg: MarketplaceProductCandidateResponse[],
+      minScore: number,
+      silent = false
+    ): Promise<MarketplaceProductMatchPairResponse[]> => {
+      if (ys.length === 0 || mg.length === 0) {
+        return [];
+      }
+      try {
+        const payload: MarketplaceProductMatchRequest = {
+          categoryId,
+          ys,
+          mg,
+          minScore,
+        };
+        return await request<MarketplaceProductMatchPairResponse[]>(
+          "/categories/marketplace-products/match",
+          {
+            method: "POST",
+            body: JSON.stringify(payload),
+          }
+        );
+      } catch (err) {
+        if (!silent) {
+          addNotice(`Eslestirme backend hatasi: ${(err as Error).message}`, "error");
+        }
+        return [];
+      }
+    },
+    [addNotice]
+  );
 
   const refreshTotalMarketplaceProductCount = useCallback(async () => {
     const [ysResult, mgResult] = await Promise.allSettled([
@@ -1148,24 +905,27 @@ export default function HomePage() {
       }
       byCategory.set(item.categoryId, bucket);
     });
-    let matchedPairs = 0;
-    byCategory.forEach((group) => {
-      const pairs = buildMarketplacePairs(
-        group.ys.map(addedToCandidate),
-        group.mg.map(addedToCandidate),
-        0.72
-      );
-      matchedPairs += pairs.length;
-    });
+    const pairGroups = await Promise.all(
+      [...byCategory.entries()].map(([categoryId, group]) =>
+        matchMarketplacePairs(
+          categoryId,
+          group.ys.map(addedToCandidate),
+          group.mg.map(addedToCandidate),
+          0.72,
+          true
+        )
+      )
+    );
+    const matchedPairs = pairGroups.reduce((sum, items) => sum + items.length, 0);
     setMatchedMarketplaceProductCount(matchedPairs);
     setTotalMarketplaceProductCount(ysRows.length + mgRows.length - matchedPairs);
-  }, []);
+  }, [matchMarketplacePairs]);
 
   useEffect(() => {
     loadCategories().catch((err) =>
       addNotice(`Kategoriler yuklenemedi: ${err.message}`, "error")
     );
-  }, [addNotice]);
+  }, [addNotice, loadCategories]);
 
   useEffect(() => {
     void refreshTotalMarketplaceProductCount();
@@ -1233,6 +993,66 @@ export default function HomePage() {
   }, [userSettings]);
 
   useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(MAIN_CATEGORY_STORAGE_KEY);
+      if (!raw) {
+        setCustomMainCategories([]);
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        setCustomMainCategories([]);
+        return;
+      }
+      const sanitized = parsed
+        .map((item) => (typeof item === "string" ? item.trim() : ""))
+        .filter((item) => item.length > 0);
+      setCustomMainCategories(Array.from(new Set(sanitized)));
+    } catch {
+      setCustomMainCategories([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(MAIN_CATEGORY_STORAGE_KEY, JSON.stringify(customMainCategories));
+  }, [customMainCategories]);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(MAIN_CATEGORY_ASSIGNMENT_STORAGE_KEY);
+      if (!raw) {
+        setMainCategoryAssignments({});
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        setMainCategoryAssignments({});
+        return;
+      }
+      const normalized: Record<string, string | null> = {};
+      Object.entries(parsed).forEach(([key, value]) => {
+        if (typeof value === "string") {
+          normalized[key] = value.trim() || null;
+          return;
+        }
+        if (value === null) {
+          normalized[key] = null;
+        }
+      });
+      setMainCategoryAssignments(normalized);
+    } catch {
+      setMainCategoryAssignments({});
+    }
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      MAIN_CATEGORY_ASSIGNMENT_STORAGE_KEY,
+      JSON.stringify(mainCategoryAssignments)
+    );
+  }, [mainCategoryAssignments]);
+
+  useEffect(() => {
     void request<NeedListItemDto[]>("/needs")
       .then((rows) => {
         setNeedList((Array.isArray(rows) ? rows : []) as NeedListItem[]);
@@ -1278,6 +1098,34 @@ export default function HomePage() {
   }, [categories]);
 
   useEffect(() => {
+    if (categories.length === 0) {
+      return;
+    }
+    setCategories((prev) =>
+      prev.map((item) => {
+        const override = mainCategoryAssignments[String(item.id)];
+        if (override === undefined) {
+          return item;
+        }
+        return { ...item, mainCategory: override };
+      })
+    );
+  }, [categories.length, mainCategoryAssignments]);
+
+  useEffect(() => {
+    if (!showMainCategoryModal) {
+      return;
+    }
+    if (mainCategoryOptions.length === 0) {
+      setRenameMainCategorySource("");
+      return;
+    }
+    if (!renameMainCategorySource || !mainCategoryOptions.includes(renameMainCategorySource)) {
+      setRenameMainCategorySource(mainCategoryOptions[0]);
+    }
+  }, [mainCategoryOptions, renameMainCategorySource, showMainCategoryModal]);
+
+  useEffect(() => {
     if (pendingScrollId === null) {
       return;
     }
@@ -1293,24 +1141,69 @@ export default function HomePage() {
       addNotice("Kategori adi gerekli.", "error");
       return;
     }
+    const normalizedMainCategory = mainCategoryName.trim();
     setBusy(true);
     try {
-      const created = await requestForMarketplace<Category>("MG", "/categories", {
-        method: "POST",
-        body: JSON.stringify({ name: categoryName }),
-      });
+      let created: Category;
       try {
-        await requestForMarketplace<Category>("YS", "/categories", {
+        created = await requestForMarketplace<Category>("MG", "/categories", {
           method: "POST",
-          body: JSON.stringify({ name: categoryName }),
+          body: JSON.stringify({
+            name: categoryName,
+            mainCategory: normalizedMainCategory || null,
+          }),
         });
+      } catch (err) {
+        if (!isReadRequestFailure(err)) {
+          throw err;
+        }
+        created = await requestForMarketplace<Category>("MG", "/categories", {
+          method: "POST",
+          body: JSON.stringify({
+            name: categoryName,
+          }),
+        });
+      }
+      try {
+        try {
+          await requestForMarketplace<Category>("YS", "/categories", {
+            method: "POST",
+            body: JSON.stringify({
+              name: categoryName,
+              mainCategory: normalizedMainCategory || null,
+            }),
+          });
+        } catch (err) {
+          if (!isReadRequestFailure(err)) {
+            throw err;
+          }
+          await requestForMarketplace<Category>("YS", "/categories", {
+            method: "POST",
+            body: JSON.stringify({
+              name: categoryName,
+            }),
+          });
+        }
       } catch {
         // Keep MG as source of truth if YS mirror write fails.
       }
       setCategoryName("");
+      setMainCategoryName("");
       setShowAddCategory(false);
       setShowAllCategories(true);
       await loadCategories();
+      if (normalizedMainCategory) {
+        const assignmentValue = normalizedMainCategory;
+        setMainCategoryAssignments((prev) => ({
+          ...prev,
+          [String(created.id)]: assignmentValue,
+        }));
+        setCategories((prev) =>
+          prev.map((item) =>
+            item.id === created.id ? { ...item, mainCategory: assignmentValue } : item
+          )
+        );
+      }
       addNotice("Kategori eklendi.", "success");
       setExpandedCategoryId(created.id);
       setPendingScrollId(created.id);
@@ -1329,6 +1222,295 @@ export default function HomePage() {
       addNotice(`Kategori eklenemedi: ${(err as Error).message}`, "error");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const syncCategoryMainCategory = async (
+    category: Category,
+    nextMainCategory: string | null
+  ) => {
+    const normalizedMainCategory = (nextMainCategory ?? "").trim() || null;
+    let mainCategorySentToBackend = true;
+    try {
+      await requestForMarketplace<Category>("MG", `/categories/${category.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          name: category.name,
+          mainCategory: normalizedMainCategory,
+        }),
+      });
+    } catch (err) {
+      if (!isReadRequestFailure(err)) {
+        throw err;
+      }
+      mainCategorySentToBackend = false;
+      await requestForMarketplace<Category>("MG", `/categories/${category.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          name: category.name,
+        }),
+      });
+    }
+    try {
+      const ysCategories = await requestForMarketplace<Category[]>("YS", "/categories");
+      const mirrorCategory = ysCategories.find(
+        (item) =>
+          item.name.trim().toLocaleLowerCase("tr-TR") ===
+          category.name.trim().toLocaleLowerCase("tr-TR")
+      );
+      if (mirrorCategory) {
+        try {
+          await requestForMarketplace<Category>("YS", `/categories/${mirrorCategory.id}`, {
+            method: "PUT",
+            body: JSON.stringify({
+              name: mirrorCategory.name,
+              mainCategory: normalizedMainCategory,
+            }),
+          });
+        } catch (err) {
+          if (!isReadRequestFailure(err)) {
+            throw err;
+          }
+          mainCategorySentToBackend = false;
+          await requestForMarketplace<Category>("YS", `/categories/${mirrorCategory.id}`, {
+            method: "PUT",
+            body: JSON.stringify({
+              name: mirrorCategory.name,
+            }),
+          });
+        }
+      }
+    } catch {
+      // Keep MG as source of truth if YS mirror update fails.
+    }
+    if (!mainCategorySentToBackend) {
+      setMainCategoryAssignments((prev) => ({
+        ...prev,
+        [String(category.id)]: normalizedMainCategory,
+      }));
+    } else {
+      setMainCategoryAssignments((prev) => {
+        const next = { ...prev };
+        delete next[String(category.id)];
+        return next;
+      });
+    }
+    setCategories((prev) =>
+      prev.map((item) =>
+        item.id === category.id
+          ? { ...item, mainCategory: normalizedMainCategory }
+          : item
+      )
+    );
+  };
+
+  const handleCreateMainCategory = () => {
+    const normalized = newMainCategoryDraft.trim();
+    if (!normalized) {
+      addNotice("Ana kategori adi gerekli.", "error");
+      return false;
+    }
+    const exists = mainCategoryOptions.some(
+      (item) => item.toLocaleLowerCase("tr-TR") === normalized.toLocaleLowerCase("tr-TR")
+    );
+    if (exists) {
+      addNotice("Bu ana kategori zaten var.", "info");
+      return false;
+    }
+    setCustomMainCategories((prev) => [...prev, normalized]);
+    setRenameMainCategorySource(normalized);
+    setSelectedMainCategoryFilterKey(UNCATEGORIZED_MAIN_CATEGORY_KEY);
+    setShowInlineMainCategoryInput(false);
+    setNewMainCategoryDraft("");
+    addNotice("Ana kategori olusturuldu.", "success");
+    return true;
+  };
+
+  const renameMainCategory = async (sourceRaw: string, targetRaw: string) => {
+    const source = sourceRaw.trim();
+    const target = targetRaw.trim();
+    if (!source) {
+      addNotice("Degistirilecek ana kategoriyi secin.", "error");
+      return false;
+    }
+    if (!target) {
+      addNotice("Yeni ana kategori adi gerekli.", "error");
+      return false;
+    }
+    if (source.toLocaleLowerCase("tr-TR") === target.toLocaleLowerCase("tr-TR")) {
+      addNotice("Yeni ad mevcut ad ile ayni.", "info");
+      return false;
+    }
+    const hasConflict = mainCategoryOptions.some(
+      (item) =>
+        item.toLocaleLowerCase("tr-TR") === target.toLocaleLowerCase("tr-TR") &&
+        item.toLocaleLowerCase("tr-TR") !== source.toLocaleLowerCase("tr-TR")
+    );
+    if (hasConflict) {
+      addNotice("Bu isimde baska bir ana kategori var.", "error");
+      return false;
+    }
+    setBusy(true);
+    try {
+      const impactedCategories = categories.filter(
+        (category) => (category.mainCategory ?? "").trim() === source
+      );
+      await Promise.all(
+        impactedCategories.map((category) => syncCategoryMainCategory(category, target))
+      );
+      setCustomMainCategories((prev) =>
+        Array.from(
+          new Set(
+            prev.map((item) => (item === source ? target : item)).filter((item) => item.trim().length > 0)
+          )
+        )
+      );
+      setRenameMainCategorySource(target);
+      setRenameMainCategoryTarget("");
+      addNotice("Ana kategori adi guncellendi.", "success");
+      return true;
+    } catch (err) {
+      addNotice(`Ana kategori guncellenemedi: ${(err as Error).message}`, "error");
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRenameMainCategory = async () => {
+    await renameMainCategory(renameMainCategorySource, renameMainCategoryTarget);
+  };
+
+  const onRenameMainCategoryClick = (event: MouseEvent, source: string) => {
+    event.stopPropagation();
+    const nextName = window.prompt("Yeni ana kategori adi:", source) ?? "";
+    if (!nextName.trim()) {
+      return;
+    }
+    void renameMainCategory(source, nextName);
+  };
+
+  const deleteMainCategory = async (sourceRaw: string) => {
+    const source = sourceRaw.trim();
+    if (!source) {
+      addNotice("Silinecek ana kategoriyi secin.", "error");
+      return false;
+    }
+    setBusy(true);
+    try {
+      const impactedCategories = categories.filter(
+        (category) => (category.mainCategory ?? "").trim() === source
+      );
+      await Promise.all(
+        impactedCategories.map((category) => syncCategoryMainCategory(category, null))
+      );
+      setCustomMainCategories((prev) =>
+        prev.filter((item) => item.toLocaleLowerCase("tr-TR") !== source.toLocaleLowerCase("tr-TR"))
+      );
+      setCategories((prev) =>
+        prev.map((item) =>
+          (item.mainCategory ?? "").trim() === source ? { ...item, mainCategory: null } : item
+        )
+      );
+      if (selectedMainCategoryFilterKey === source) {
+        setSelectedMainCategoryFilterKey(UNCATEGORIZED_MAIN_CATEGORY_KEY);
+      }
+      addNotice("Ana kategori silindi. Kategoriler korunarak ana kategori bagi kaldirildi.", "success");
+      return true;
+    } catch (err) {
+      addNotice(`Ana kategori silinemedi: ${(err as Error).message}`, "error");
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onDeleteMainCategoryClick = (event: MouseEvent, source: string) => {
+    event.stopPropagation();
+    void deleteMainCategory(source);
+  };
+
+  const handleAssignCategoryToMainCategory = async (
+    categoryId: number,
+    mainCategoryKey: string
+  ) => {
+    const category = categories.find((item) => item.id === categoryId);
+    if (!category) {
+      return;
+    }
+    const targetMainCategory =
+      mainCategoryKey === UNCATEGORIZED_MAIN_CATEGORY_KEY ? null : mainCategoryKey;
+    const currentMainCategory = (category.mainCategory ?? "").trim() || null;
+    const normalizedTarget = (targetMainCategory ?? "").trim() || null;
+    if (currentMainCategory === normalizedTarget) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await syncCategoryMainCategory(category, normalizedTarget);
+      if (normalizedTarget) {
+        setCustomMainCategories((prev) => (prev.includes(normalizedTarget) ? prev : [...prev, normalizedTarget]));
+      }
+      addNotice("Kategori ana kategoriye tasindi.", "success");
+    } catch (err) {
+      addNotice(`Kategori tasinamadi: ${(err as Error).message}`, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRemoveCategoryFromMainCategory = async (event: MouseEvent, categoryId: number) => {
+    event.stopPropagation();
+    const category = categories.find((item) => item.id === categoryId);
+    if (!category) {
+      return;
+    }
+    const currentMainCategory = (category.mainCategory ?? "").trim();
+    if (!currentMainCategory) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await syncCategoryMainCategory(category, null);
+      addNotice("Kategori ana kategoriden cikarildi. Kategori korunuyor.", "success");
+    } catch (err) {
+      addNotice(`Kategori ana kategoriden cikarilamadi: ${(err as Error).message}`, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onCategoryDragStart = (event: DragEvent, categoryId: number) => {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData(CATEGORY_DRAG_TYPE, String(categoryId));
+    setDraggedCategoryId(categoryId);
+  };
+
+  const onCategoryDragEnd = () => {
+    setDraggedCategoryId(null);
+    setActiveMainCategoryDropKey(null);
+  };
+
+  const onMainCategoryDragOver = (event: DragEvent, mainCategoryKey: string) => {
+    if (!event.dataTransfer.types.includes(CATEGORY_DRAG_TYPE)) {
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setActiveMainCategoryDropKey(mainCategoryKey);
+  };
+
+  const onMainCategoryDrop = (event: DragEvent, mainCategoryKey: string) => {
+    if (!event.dataTransfer.types.includes(CATEGORY_DRAG_TYPE)) {
+      return;
+    }
+    event.preventDefault();
+    const raw = event.dataTransfer.getData(CATEGORY_DRAG_TYPE);
+    const categoryId = Number.parseInt(raw, 10);
+    setActiveMainCategoryDropKey(null);
+    setDraggedCategoryId(null);
+    if (Number.isFinite(categoryId)) {
+      void handleAssignCategoryToMainCategory(categoryId, mainCategoryKey);
     }
   };
 
@@ -1397,18 +1579,29 @@ export default function HomePage() {
     }
 
     const resolverPromise = (async () => {
-    if (marketplaceCode === "MG") {
-        return category.id;
-    }
-    const marketplaceCategories = await requestForMarketplace<Category[]>(
-      marketplaceCode,
-      "/categories"
-    );
-    const normalizedCategoryName = category.name.trim().toLocaleLowerCase("tr-TR");
-    const matched = marketplaceCategories.find(
-      (item) => item.name.trim().toLocaleLowerCase("tr-TR") === normalizedCategoryName
-    );
-    return matched?.id ?? null;
+      const marketplaceCategories = await requestForMarketplace<Category[]>(
+        marketplaceCode,
+        "/categories"
+      );
+      const normalizedCategoryName = normalizeProductName(category.name);
+      const exact = marketplaceCategories.find(
+        (item) => normalizeProductName(item.name) === normalizedCategoryName
+      );
+      if (exact) {
+        return exact.id;
+      }
+      const loose = marketplaceCategories.find((item) => {
+        const normalized = normalizeProductName(item.name);
+        return (
+          normalized.includes(normalizedCategoryName) ||
+          normalizedCategoryName.includes(normalized)
+        );
+      });
+      if (loose) {
+        return loose.id;
+      }
+      const sameId = marketplaceCategories.find((item) => item.id === category.id);
+      return sameId?.id ?? null;
     })();
 
     marketplaceCategoryIdInFlightRef.current[cacheKey] = resolverPromise;
@@ -1429,19 +1622,55 @@ export default function HomePage() {
         resolveCategoryIdForMarketplace(category, "YS"),
         resolveCategoryIdForMarketplace(category, "MG"),
       ]);
+      const fetchCandidatesWithFallback = async (
+        marketplaceCode: MarketplaceCode,
+        resolvedCategoryId: number | null
+      ) => {
+        const idCandidates = Array.from(
+          new Set(
+            [resolvedCategoryId, category.id].filter(
+              (id): id is number => typeof id === "number" && Number.isFinite(id) && id > 0
+            )
+          )
+        );
+        if (idCandidates.length === 0) {
+          return [] as MarketplaceProductCandidateResponse[];
+        }
+        let lastError: Error | null = null;
+        const mergedByKey = new Map<string, MarketplaceProductCandidateResponse>();
+        let successCount = 0;
+        for (let index = 0; index < idCandidates.length; index += 1) {
+          const categoryId = idCandidates[index];
+          try {
+            const rows = await requestForMarketplace<MarketplaceProductCandidateResponse[]>(
+              marketplaceCode,
+              `/categories/${categoryId}/marketplace-products`
+            );
+            const filtered = rows.filter(
+              (item) => item.marketplaceCode === marketplaceCode
+            );
+            filtered.forEach((item) => {
+              const key = `${item.marketplaceCode}:${item.externalId}`;
+              if (!mergedByKey.has(key)) {
+                mergedByKey.set(key, item);
+              }
+            });
+            successCount += 1;
+          } catch (err) {
+            lastError = err as Error;
+          }
+        }
+        if (mergedByKey.size > 0 || successCount > 0) {
+          return [...mergedByKey.values()];
+        }
+        if (lastError) {
+          throw lastError;
+        }
+        return [] as MarketplaceProductCandidateResponse[];
+      };
       const [ysCandidates, mgCandidates] = await Promise.all([
-        ysCategoryId === null
-          ? Promise.resolve([] as MarketplaceProductCandidateResponse[])
-          : requestForMarketplace<MarketplaceProductCandidateResponse[]>(
-              "YS",
-              `/categories/${ysCategoryId}/marketplace-products`
-            ),
-        mgCategoryId === null
-          ? Promise.resolve([] as MarketplaceProductCandidateResponse[])
-          : requestForMarketplace<MarketplaceProductCandidateResponse[]>(
-              "MG",
-              `/categories/${mgCategoryId}/marketplace-products`
-            ),
+        fetchCandidatesWithFallback("YS", ysCategoryId),
+        fetchCandidatesWithFallback("MG", mgCategoryId),
       ]);
       const candidates = [...ysCandidates, ...mgCandidates];
       setCandidateItemsByCategory((prev) => ({
@@ -1611,7 +1840,10 @@ export default function HomePage() {
         })()
       );
     }
-    if (!candidateItemsByCategory[category.id]) {
+    const existingCandidates = candidateItemsByCategory[category.id] ?? [];
+    const hasYsCandidates = existingCandidates.some((item) => item.marketplaceCode === "YS");
+    const hasMgCandidates = existingCandidates.some((item) => item.marketplaceCode === "MG");
+    if (existingCandidates.length === 0 || !hasYsCandidates || !hasMgCandidates) {
       startupTasks.push(loadCandidates(category));
     }
     const loadedAdded = addedProductsByCategory[category.id];
@@ -1640,7 +1872,6 @@ export default function HomePage() {
   ): MarketplaceProductEntryResponse => ({
     marketplaceCode: candidate.marketplaceCode,
     externalId: candidate.externalId,
-    sku: candidate.sku,
     name: candidate.name,
     productId: null,
     brandName: candidate.brandName,
@@ -1652,6 +1883,9 @@ export default function HomePage() {
     campaignBuyQuantity: candidate.campaignBuyQuantity,
     campaignPayQuantity: candidate.campaignPayQuantity,
     effectivePrice: candidate.effectivePrice,
+    unit: candidate.unit,
+    unitValue: candidate.unitValue,
+    packCount: candidate.packCount,
   });
 
   const addOptimisticAddedProduct = (
@@ -1806,12 +2040,6 @@ export default function HomePage() {
   };
 
   const handleDeleteCategory = async (category: Category) => {
-    const confirmed = window.confirm(
-      `"${category.name}" kategorisini silmek istiyor musun?`
-    );
-    if (!confirmed) {
-      return;
-    }
     setBusy(true);
     try {
       await requestForMarketplace<string>("MG", `/categories/${category.id}`, {
@@ -1842,11 +2070,129 @@ export default function HomePage() {
         setHistoryRangeFilter("1M");
         setHoveredHistoryPoint(null);
       }
+      try {
+        await refreshTotalMarketplaceProductCount();
+      } catch {
+        // Counter refresh failure should not block successful delete UX.
+      }
       addNotice("Kategori silindi.", "success");
     } catch (err) {
       addNotice(`Kategori silinemedi: ${(err as Error).message}`, "error");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const renameCategory = async (category: Category, nextNameRaw: string) => {
+    const nextName = nextNameRaw.trim();
+    if (!nextName) {
+      addNotice("Kategori adi bos olamaz.", "error");
+      return false;
+    }
+    if (nextName.toLocaleLowerCase("tr-TR") === category.name.trim().toLocaleLowerCase("tr-TR")) {
+      addNotice("Yeni kategori adi mevcut ad ile ayni.", "info");
+      return false;
+    }
+    setBusy(true);
+    try {
+      const mainCategory = (category.mainCategory ?? "").trim() || null;
+      try {
+        await requestForMarketplace<Category>("MG", `/categories/${category.id}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            name: nextName,
+            mainCategory,
+          }),
+        });
+      } catch (err) {
+        if (!isReadRequestFailure(err)) {
+          throw err;
+        }
+        await requestForMarketplace<Category>("MG", `/categories/${category.id}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            name: nextName,
+          }),
+        });
+      }
+      try {
+        const ysCategories = await requestForMarketplace<Category[]>("YS", "/categories");
+        const mirrorCategory = ysCategories.find(
+          (item) =>
+            item.name.trim().toLocaleLowerCase("tr-TR") ===
+            category.name.trim().toLocaleLowerCase("tr-TR")
+        );
+        if (mirrorCategory) {
+          try {
+            await requestForMarketplace<Category>("YS", `/categories/${mirrorCategory.id}`, {
+              method: "PUT",
+              body: JSON.stringify({
+                name: nextName,
+                mainCategory,
+              }),
+            });
+          } catch (err) {
+            if (!isReadRequestFailure(err)) {
+              throw err;
+            }
+            await requestForMarketplace<Category>("YS", `/categories/${mirrorCategory.id}`, {
+              method: "PUT",
+              body: JSON.stringify({
+                name: nextName,
+              }),
+            });
+          }
+        }
+      } catch {
+        // Keep MG as source of truth if YS mirror update fails.
+      }
+      setCategories((prev) =>
+        prev.map((item) =>
+          item.id === category.id
+            ? { ...item, name: nextName }
+            : item
+        )
+      );
+      setNeedList((prev) =>
+        prev.map((item) =>
+          item.categoryId === category.id
+            ? {
+                ...item,
+                categoryName: nextName,
+                name:
+                  item.type === "CATEGORY"
+                    ? `${formatCategoryTitle(nextName)} (Kategori)`
+                    : item.name,
+              }
+            : item
+        )
+      );
+      addNotice("Kategori adi guncellendi.", "success");
+      return true;
+    } catch (err) {
+      addNotice(`Kategori adi guncellenemedi: ${(err as Error).message}`, "error");
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const startInlineCategoryRename = (event: MouseEvent, category: Category) => {
+    event.stopPropagation();
+    setEditingCategoryId(category.id);
+    setEditingCategoryName(category.name);
+  };
+
+  const submitInlineCategoryRename = async (category: Category) => {
+    const nextName = editingCategoryName.trim();
+    if (!nextName) {
+      addNotice("Kategori adi bos olamaz.", "error");
+      return;
+    }
+    const renamed = await renameCategory(category, nextName);
+    if (renamed) {
+      setEditingCategoryId(null);
+      setEditingCategoryName("");
     }
   };
 
@@ -1859,28 +2205,26 @@ export default function HomePage() {
   const findBestCrossMarketplaceAddedMatch = (
     candidate: MarketplaceProductCandidateResponse
   ) => {
-    const otherMarketplaceCode = candidate.marketplaceCode === "YS" ? "MG" : "YS";
-    const sourceCandidate: MarketplaceProductCandidateResponse = { ...candidate };
-    let bestMatch:
-      | {
-          item: MarketplaceProductEntryResponse;
-          score: CandidateMatchScore;
-        }
-      | null = null;
-    for (const addedItem of allAddedProducts) {
-      if (addedItem.marketplaceCode !== otherMarketplaceCode) {
-        continue;
-      }
-      const targetCandidate = entryToCandidate(addedItem);
-      const score = scoreCandidatePair(sourceCandidate, targetCandidate);
-      if (!score) {
-        continue;
-      }
-      if (!bestMatch || score.score > bestMatch.score.score) {
-        bestMatch = { item: addedItem, score };
-      }
+    const matchedPair = addedMatchPairs.find(
+      (pair) =>
+        (pair.ys.marketplaceCode === candidate.marketplaceCode &&
+          pair.ys.externalId === candidate.externalId) ||
+        (pair.mg.marketplaceCode === candidate.marketplaceCode &&
+          pair.mg.externalId === candidate.externalId)
+    );
+    if (!matchedPair) {
+      return null;
     }
-    return bestMatch;
+    const target =
+      matchedPair.ys.marketplaceCode === candidate.marketplaceCode &&
+      matchedPair.ys.externalId === candidate.externalId
+        ? matchedPair.mg
+        : matchedPair.ys;
+    return {
+      target,
+      score: matchedPair.score,
+      autoLinkEligible: matchedPair.autoLinkEligible,
+    };
   };
 
   const isAlreadyAddedInMarketplace = (
@@ -2004,25 +2348,7 @@ export default function HomePage() {
     candidate: MarketplaceProductCandidateResponse
   ) => {
     const bestMatch = findBestCrossMarketplaceAddedMatch(candidate);
-    const autoRemoveTarget =
-      bestMatch &&
-      shouldAutoLinkCandidates(
-        {
-          score: bestMatch.score.score,
-          nameScore: bestMatch.score.nameScore,
-          coreNameScore: bestMatch.score.coreNameScore,
-          phraseScore: bestMatch.score.phraseScore,
-          quantityScore: bestMatch.score.quantityScore,
-          brandScore: bestMatch.score.brandScore,
-          imageScore: bestMatch.score.imageScore,
-          priceScore: bestMatch.score.priceScore,
-          profileScore: bestMatch.score.profileScore,
-        },
-        candidate,
-        entryToCandidate(bestMatch.item)
-      )
-        ? entryToCandidate(bestMatch.item)
-        : null;
+    const autoRemoveTarget = bestMatch ? bestMatch.target : null;
     const removed = await mutateCandidateProduct(
       category,
       candidate,
@@ -2325,7 +2651,7 @@ export default function HomePage() {
     externalId: string
   ) => `product:${categoryId}:${marketplaceCode}:${externalId}`;
 
-  const isNeedProductAdded = (
+  const isNeedProductAdded = useCallback((
     categoryId: number,
     marketplaceCode: MarketplaceCode,
     externalId: string
@@ -2336,12 +2662,12 @@ export default function HomePage() {
         item.categoryId === categoryId &&
         item.marketplaceCode === marketplaceCode &&
         item.externalId === externalId
-    );
+    ), [needList]);
 
   const isNeedCategoryAdded = (categoryId: number) =>
     needList.some((item) => item.type === "CATEGORY" && item.categoryId === categoryId);
 
-  const handleAddSingleProductToNeedList = (
+  const handleAddSingleProductToNeedList = useCallback((
     category: Category,
     product: MarketplaceProductEntryResponse
   ) => {
@@ -2388,9 +2714,9 @@ export default function HomePage() {
     };
     setNeedList((prev) => [needItem, ...prev]);
     addNotice(`${needItem.name} ihtiyac listesine eklendi.`, "success");
-  };
+  }, [addNotice, isNeedProductAdded, opportunitiesByCategory, selectedNeedUrgency]);
 
-  const handleRemoveSingleProductFromNeedList = (
+  const handleRemoveSingleProductFromNeedList = useCallback((
     category: Category,
     product: MarketplaceProductEntryResponse
   ) => {
@@ -2404,7 +2730,7 @@ export default function HomePage() {
     const targetKey = buildNeedProductKey(category.id, marketplaceCode, product.externalId);
     setNeedList((prev) => prev.filter((item) => item.key !== targetKey));
     addNotice(`${product.name || `Urun ${product.externalId}`} ihtiyac listesinden cikarildi.`, "success");
-  };
+  }, [addNotice]);
 
   const handleRemoveCategoryFromNeedList = (category: Category) => {
     const isInNeedList = needList.some((item) => item.categoryId === category.id);
@@ -2448,7 +2774,6 @@ export default function HomePage() {
       void handleRemoveCandidateProduct(category, {
         marketplaceCode,
         externalId: item.externalId,
-        sku: item.sku,
         name: item.name,
         brandName: item.brandName,
         imageUrl: item.imageUrl,
@@ -2459,6 +2784,9 @@ export default function HomePage() {
         campaignBuyQuantity: item.campaignBuyQuantity,
         campaignPayQuantity: item.campaignPayQuantity,
         effectivePrice: item.effectivePrice,
+        unit: item.unit ?? null,
+        unitValue: item.unitValue ?? null,
+        packCount: item.packCount ?? null,
       });
     };
   };
@@ -2621,24 +2949,96 @@ export default function HomePage() {
     }
     return result.slice(0, 24);
   }, [isCategoryFilterActive, normalizedCategoryFilterQuery, searchableNamesByCategory]);
+  const mainCategoryScopedCategories = useMemo(() => {
+    if (!selectedMainCategoryFilterKey) {
+      return filteredSortedCategories;
+    }
+    if (selectedMainCategoryFilterKey === UNCATEGORIZED_MAIN_CATEGORY_KEY) {
+      return filteredSortedCategories.filter(
+        (category) => !(category.mainCategory ?? "").trim()
+      );
+    }
+    return filteredSortedCategories.filter(
+      (category) => (category.mainCategory ?? "").trim() === selectedMainCategoryFilterKey
+    );
+  }, [filteredSortedCategories, selectedMainCategoryFilterKey]);
   const categoryTotalPages = isCategoryFilterActive
     ? 1
-    : Math.max(1, Math.ceil(filteredSortedCategories.length / CATEGORY_PAGE_SIZE));
+    : Math.max(1, Math.ceil(mainCategoryScopedCategories.length / CATEGORY_PAGE_SIZE));
   const currentCategoryPage = isCategoryFilterActive
     ? 0
     : Math.min(categoryPage, categoryTotalPages - 1);
   const pagedCategories = useMemo(() => {
     if (isCategoryFilterActive) {
-      return filteredSortedCategories;
+      return mainCategoryScopedCategories;
     }
     const start = currentCategoryPage * CATEGORY_PAGE_SIZE;
-    return filteredSortedCategories.slice(start, start + CATEGORY_PAGE_SIZE);
-  }, [currentCategoryPage, filteredSortedCategories, isCategoryFilterActive]);
+    return mainCategoryScopedCategories.slice(start, start + CATEGORY_PAGE_SIZE);
+  }, [currentCategoryPage, isCategoryFilterActive, mainCategoryScopedCategories]);
   const visibleCategories = isCategoryFilterActive
-    ? filteredSortedCategories
+    ? mainCategoryScopedCategories
     : currentCategoryPage === 0 && !showAllCategories
       ? pagedCategories.slice(0, CATEGORY_VISIBLE_COUNT)
       : pagedCategories;
+  const standaloneVisibleCategories = useMemo(() => {
+    if (selectedMainCategoryFilterKey) {
+      return visibleCategories;
+    }
+    const standalonePagedCategories = pagedCategories.filter(
+      (category) => !(category.mainCategory ?? "").trim()
+    );
+    if (isCategoryFilterActive) {
+      return mainCategoryScopedCategories.filter((category) => !(category.mainCategory ?? "").trim());
+    }
+    if (currentCategoryPage === 0 && !showAllCategories) {
+      return standalonePagedCategories.slice(0, CATEGORY_VISIBLE_COUNT);
+    }
+    return standalonePagedCategories;
+  }, [
+    currentCategoryPage,
+    isCategoryFilterActive,
+    mainCategoryScopedCategories,
+    selectedMainCategoryFilterKey,
+    pagedCategories,
+    showAllCategories,
+    visibleCategories,
+  ]);
+  const mainCategoryGroups = useMemo(() => {
+    const groups = new Map<string, { key: string; label: string; categories: Category[] }>();
+    groups.set(UNCATEGORIZED_MAIN_CATEGORY_KEY, {
+      key: UNCATEGORIZED_MAIN_CATEGORY_KEY,
+      label: UNCATEGORIZED_MAIN_CATEGORY_LABEL,
+      categories: [],
+    });
+    mainCategoryOptions.forEach((name) => {
+      groups.set(name, { key: name, label: name, categories: [] });
+    });
+    filteredSortedCategories.forEach((category) => {
+      const normalizedMainCategory = (category.mainCategory ?? "").trim();
+      const key = normalizedMainCategory || UNCATEGORIZED_MAIN_CATEGORY_KEY;
+      const existing = groups.get(key);
+      if (existing) {
+        existing.categories.push(category);
+        return;
+      }
+      groups.set(key, {
+        key,
+        label: normalizedMainCategory || UNCATEGORIZED_MAIN_CATEGORY_LABEL,
+        categories: [category],
+      });
+    });
+    const groupList = Array.from(groups.values());
+    return groupList.sort((left, right) => {
+      if (left.key === UNCATEGORIZED_MAIN_CATEGORY_KEY) {
+        return -1;
+      }
+      if (right.key === UNCATEGORIZED_MAIN_CATEGORY_KEY) {
+        return 1;
+      }
+      return left.label.localeCompare(right.label, "tr-TR", { sensitivity: "base" });
+    });
+  }, [filteredSortedCategories, mainCategoryOptions]);
+  const displayedMainCategoryGroups = useMemo(() => mainCategoryGroups, [mainCategoryGroups]);
   const needProductPreviewByCategory = useMemo(() => {
     const grouped: Record<number, string[]> = {};
     needList.forEach((item) => {
@@ -2690,6 +3090,11 @@ export default function HomePage() {
   }, [isCategoryFilterActive]);
 
   useEffect(() => {
+    setCategoryPage(0);
+    setShowAllCategories(false);
+  }, [selectedMainCategoryFilterKey]);
+
+  useEffect(() => {
     if (expandedCategoryId === null) {
       return;
     }
@@ -2704,11 +3109,25 @@ export default function HomePage() {
     }
   }, [currentCategoryPage, expandedCategoryId, filteredSortedCategories]);
 
-  const suggestedMatchPairs = useMemo(() => {
+  useEffect(() => {
+    let cancelled = false;
     const ys = activeCandidates.filter((item) => item.marketplaceCode === "YS");
     const mg = activeCandidates.filter((item) => item.marketplaceCode === "MG");
-    return buildMarketplacePairs(ys, mg, MATCH_MIN_SCORE);
-  }, [activeCandidates]);
+    if (!activeCategory || ys.length === 0 || mg.length === 0) {
+      setSuggestedMatchPairs([]);
+      return () => {
+        cancelled = true;
+      };
+    }
+    void matchMarketplacePairs(activeCategory.id, ys, mg, MATCH_MIN_SCORE, true).then((pairs) => {
+      if (!cancelled) {
+        setSuggestedMatchPairs(pairs);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeCandidates, activeCategory, matchMarketplacePairs]);
 
   const suggestedMatchKeySet = useMemo(() => {
     const keys = new Set<string>();
@@ -2728,15 +3147,32 @@ export default function HomePage() {
     return rankMap;
   }, [suggestedMatchPairs]);
 
-  const addedMatchPairs = useMemo(() => {
-    const ys = allAddedProducts
-      .filter((item) => item.marketplaceCode === "YS")
-      .map(entryToCandidate);
-    const mg = allAddedProducts
-      .filter((item) => item.marketplaceCode === "MG")
-      .map(entryToCandidate);
-    return buildMarketplacePairs(ys, mg, MATCH_MIN_SCORE);
-  }, [allAddedProducts]);
+  const suggestedMatchPairByKey = useMemo(() => {
+    const pairByKey: Record<string, MarketplaceProductMatchPairResponse> = {};
+    suggestedMatchPairs.forEach((pair) => {
+      const ysKey = candidateKey(pair.ys);
+      const mgKey = candidateKey(pair.mg);
+      const ysExisting = pairByKey[ysKey];
+      const mgExisting = pairByKey[mgKey];
+      if (!ysExisting || pair.score.score > ysExisting.score.score) {
+        pairByKey[ysKey] = pair;
+      }
+      if (!mgExisting || pair.score.score > mgExisting.score.score) {
+        pairByKey[mgKey] = pair;
+      }
+    });
+    return pairByKey;
+  }, [suggestedMatchPairs]);
+
+  const addedMatchPairs = useMemo(
+    () =>
+      suggestedMatchPairs.filter(
+        (pair) =>
+          addedCandidateIds.has(`${pair.ys.marketplaceCode}:${pair.ys.externalId}`) &&
+          addedCandidateIds.has(`${pair.mg.marketplaceCode}:${pair.mg.externalId}`)
+      ),
+    [suggestedMatchPairs, addedCandidateIds]
+  );
 
   const addedMatchKeySet = useMemo(() => {
     const keys = new Set<string>();
@@ -2755,6 +3191,234 @@ export default function HomePage() {
     });
     return rankMap;
   }, [addedMatchPairs]);
+
+  const manualMatchOptions = useMemo(() => {
+    if (!selectedAddedProduct || !selectedProductCategory) {
+      return [];
+    }
+    const oppositeMarketplaceCode: MarketplaceCode =
+      selectedAddedProduct.marketplaceCode === "YS" ? "MG" : "YS";
+    const categoryRows = addedProductsByCategory[selectedProductCategory.id]?.[oppositeMarketplaceCode] ?? [];
+    return categoryRows
+      .filter((item) => item.externalId !== selectedAddedProduct.externalId)
+      .map((item) => ({
+        externalId: item.externalId,
+        label: `${item.name || "Isimsiz urun"} | ${item.brandName || "Marka yok"}`,
+      }));
+  }, [addedProductsByCategory, selectedAddedProduct, selectedProductCategory]);
+
+  const saveManualMatch = useCallback(async (
+    categoryId: number,
+    sourceMarketplaceCode: MarketplaceCode,
+    sourceExternalId: string,
+    targetExternalId: string
+  ) => {
+    const payload: MarketplaceManualMatchRequest =
+      sourceMarketplaceCode === "YS"
+        ? {
+            ysExternalId: sourceExternalId,
+            mgExternalId: targetExternalId,
+          }
+        : {
+            ysExternalId: targetExternalId,
+            mgExternalId: sourceExternalId,
+          };
+    setManualMatchBusy(true);
+    try {
+      await request<void>(
+        `/categories/${categoryId}/marketplace-products/manual-match`,
+        {
+          method: "POST",
+          body: JSON.stringify(payload),
+        }
+      );
+      addNotice("Manuel eslestirme kaydedildi.", "success");
+      if (activeCategory?.id === categoryId) {
+        const ysCandidates = activeCandidates.filter((item) => item.marketplaceCode === "YS");
+        const mgCandidates = activeCandidates.filter((item) => item.marketplaceCode === "MG");
+        if (ysCandidates.length > 0 && mgCandidates.length > 0) {
+          const refreshedSuggestedPairs = await matchMarketplacePairs(
+            categoryId,
+            ysCandidates,
+            mgCandidates,
+            MATCH_MIN_SCORE,
+            true
+          );
+          setSuggestedMatchPairs(refreshedSuggestedPairs);
+        }
+      }
+      setManualMatchSource(null);
+    } catch (err) {
+      addNotice(`Manuel eslestirme kaydedilemedi: ${(err as Error).message}`, "error");
+    } finally {
+      setManualMatchBusy(false);
+    }
+  }, [
+    addNotice,
+    matchMarketplacePairs,
+    activeCategory,
+    activeCandidates,
+  ]);
+
+  const handleCreateManualMatch = useCallback(async (targetExternalId: string) => {
+    if (!selectedAddedProduct || !selectedProductCategory) {
+      return;
+    }
+    const sourceMarketplaceCode = asMarketplaceCode(selectedAddedProduct.marketplaceCode);
+    if (!sourceMarketplaceCode) {
+      addNotice("Manuel eslestirme icin gecersiz marketplace.", "error");
+      return;
+    }
+    await saveManualMatch(
+      selectedProductCategory.id,
+      sourceMarketplaceCode,
+      selectedAddedProduct.externalId,
+      targetExternalId
+    );
+  }, [selectedAddedProduct, selectedProductCategory, addNotice, saveManualMatch]);
+
+  const handleStartManualMatchFromCandidate = useCallback((
+    category: Category,
+    candidate: MarketplaceProductCandidateResponse
+  ) => {
+    const marketplaceCode = asMarketplaceCode(candidate.marketplaceCode);
+    if (!marketplaceCode) {
+      addNotice("Manuel eslestirme icin gecersiz marketplace.", "error");
+      return;
+    }
+    setManualMatchSource({
+      categoryId: category.id,
+      marketplaceCode,
+      externalId: candidate.externalId,
+      name: candidate.name || `Urun ${candidate.externalId}`,
+    });
+    const targetMarketplace = marketplaceCode === "YS" ? "Migros" : "Yemeksepeti";
+    addNotice(`Eslestirme modu acildi. Simdi ${targetMarketplace} tarafindan hedef urun sec.`, "info");
+  }, [addNotice]);
+
+  const candidateToAddedEntry = useCallback(
+    (candidate: MarketplaceProductCandidateResponse): MarketplaceProductEntryResponse => ({
+      marketplaceCode: candidate.marketplaceCode,
+      externalId: candidate.externalId,
+      name: candidate.name,
+      productId: null,
+      brandName: candidate.brandName,
+      imageUrl: candidate.imageUrl,
+      price: candidate.price,
+      moneyPrice: candidate.moneyPrice,
+      basketDiscountThreshold: candidate.basketDiscountThreshold,
+      basketDiscountPrice: candidate.basketDiscountPrice,
+      campaignBuyQuantity: candidate.campaignBuyQuantity,
+      campaignPayQuantity: candidate.campaignPayQuantity,
+      effectivePrice: candidate.effectivePrice,
+      unit: candidate.unit,
+      unitValue: candidate.unitValue,
+      packCount: candidate.packCount,
+    }),
+    []
+  );
+
+  const isNeedProductAddedForCandidate = useCallback(
+    (category: Category, candidate: MarketplaceProductCandidateResponse) => {
+      const marketplaceCode = asMarketplaceCode(candidate.marketplaceCode);
+      if (!marketplaceCode) {
+        return false;
+      }
+      return isNeedProductAdded(category.id, marketplaceCode, candidate.externalId);
+    },
+    [isNeedProductAdded]
+  );
+
+  const handleToggleNeedForCandidate = useCallback(
+    (category: Category, candidate: MarketplaceProductCandidateResponse) => {
+      const entry = candidateToAddedEntry(candidate);
+      if (isNeedProductAddedForCandidate(category, candidate)) {
+        handleRemoveSingleProductFromNeedList(category, entry);
+        return;
+      }
+      handleAddSingleProductToNeedList(category, entry);
+    },
+    [
+      candidateToAddedEntry,
+      isNeedProductAddedForCandidate,
+      handleRemoveSingleProductFromNeedList,
+      handleAddSingleProductToNeedList,
+    ]
+  );
+
+  const handleSelectManualMatchTarget = useCallback(async (
+    category: Category,
+    candidate: MarketplaceProductCandidateResponse
+  ) => {
+    if (!manualMatchSource) {
+      return;
+    }
+    if (manualMatchSource.categoryId !== category.id) {
+      addNotice("Eslestirme ayni kategori icinde yapilmali.", "error");
+      return;
+    }
+    if (manualMatchSource.marketplaceCode === candidate.marketplaceCode) {
+      addNotice("Hedef urun karsi markette olmali.", "error");
+      return;
+    }
+    await saveManualMatch(
+      category.id,
+      manualMatchSource.marketplaceCode,
+      manualMatchSource.externalId,
+      candidate.externalId
+    );
+  }, [manualMatchSource, saveManualMatch, addNotice]);
+
+  const handleRemoveManualMatchFromCandidate = useCallback(async (
+    category: Category,
+    candidate: MarketplaceProductCandidateResponse
+  ) => {
+    const pair = suggestedMatchPairs.find(
+      (item) =>
+        (item.ys.marketplaceCode === candidate.marketplaceCode &&
+          item.ys.externalId === candidate.externalId) ||
+        (item.mg.marketplaceCode === candidate.marketplaceCode &&
+          item.mg.externalId === candidate.externalId)
+    );
+    if (!pair || !pair.manualMatch) {
+      addNotice("Bu urun icin silinebilecek manuel eslestirme bulunamadi.", "info");
+      return;
+    }
+    setManualMatchBusy(true);
+    try {
+      const qs = new URLSearchParams({
+        ysExternalId: pair.ys.externalId,
+        mgExternalId: pair.mg.externalId,
+      });
+      await request<void>(
+        `/categories/${category.id}/marketplace-products/manual-match?${qs.toString()}`,
+        { method: "DELETE" }
+      );
+      addNotice("Manuel eslestirme silindi.", "success");
+      const ysCandidates = activeCandidates.filter((item) => item.marketplaceCode === "YS");
+      const mgCandidates = activeCandidates.filter((item) => item.marketplaceCode === "MG");
+      if (ysCandidates.length > 0 && mgCandidates.length > 0) {
+        const refreshedSuggestedPairs = await matchMarketplacePairs(
+          category.id,
+          ysCandidates,
+          mgCandidates,
+          MATCH_MIN_SCORE,
+          true
+        );
+        setSuggestedMatchPairs(refreshedSuggestedPairs);
+      }
+    } catch (err) {
+      addNotice(`Manuel eslestirme silinemedi: ${(err as Error).message}`, "error");
+    } finally {
+      setManualMatchBusy(false);
+      setManualMatchSource(null);
+    }
+  }, [
+    suggestedMatchPairs,
+    addNotice,
+    activeCandidates,
+    matchMarketplacePairs,
+  ]);
 
   const compactHistory = useMemo(() => {
     const grouped = new Map<
@@ -3612,31 +4276,31 @@ export default function HomePage() {
     <div className="flex flex-col gap-8 overflow-x-hidden">
       <section className="rounded-3xl border border-black/10 bg-white/80 p-5 shadow-[0_20px_50px_-35px_rgba(0,0,0,0.4)] backdrop-blur">
         <div className="flex flex-wrap items-center gap-3">
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-center text-sm">
             <p className="text-xs uppercase tracking-[0.2em] text-amber-700">
               Toplam kategori
             </p>
             <p className="display text-2xl">{categories.length}</p>
           </div>
-          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm">
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-center text-sm">
             <p className="text-xs uppercase tracking-[0.2em] text-emerald-700">
               Toplam urun
             </p>
             <p className="display text-2xl">{totalMarketplaceProductCount}</p>
           </div>
-          <div className="rounded-2xl border border-fuchsia-200 bg-fuchsia-50 px-4 py-3 text-sm">
+          <div className="rounded-2xl border border-fuchsia-200 bg-fuchsia-50 px-4 py-3 text-center text-sm">
             <p className="text-xs uppercase tracking-[0.2em] text-fuchsia-700">
               Eslesen urun
             </p>
             <p className="display text-2xl">{matchedMarketplaceProductCount}</p>
           </div>
-          <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm">
+          <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-center text-sm">
             <p className="text-xs uppercase tracking-[0.2em] text-sky-700">
               Alinabilecek urun
             </p>
             <p className="display text-2xl">{basketSuggestionCount}</p>
           </div>
-          <div className="rounded-2xl border border-teal-200 bg-teal-50 px-4 py-3 text-sm">
+          <div className="rounded-2xl border border-teal-200 bg-teal-50 px-4 py-3 text-center text-sm">
             <p className="text-xs uppercase tracking-[0.2em] text-teal-700">
               Ihtiyac urun sayisi
             </p>
@@ -3662,40 +4326,62 @@ export default function HomePage() {
                 Bir kategoriyi secerek urunlerini goruntuleyin.
               </p>
             </div>
-            <button
-              className="flex h-10 w-10 items-center justify-center rounded-full bg-[#d97706] text-xl font-semibold text-white transition hover:bg-[#b45309]"
-              type="button"
-              onClick={() => setShowAddCategory(true)}
-              title="Kategori ekle"
-            >
-              +
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                className="flex h-10 w-10 items-center justify-center rounded-full bg-[#d97706] text-xl font-semibold text-white transition hover:bg-[#b45309]"
+                type="button"
+                onClick={() => {
+                  setCategoryName("");
+                  setMainCategoryName("");
+                  setShowAddCategory(true);
+                }}
+                title="Kategori ekle"
+              >
+                +
+              </button>
+            </div>
           </div>
 
           {!isCategoryListCollapsed && (
           <div className="mt-6 space-y-3">
-            <div className="rounded-2xl border border-black/10 bg-[#fcfaf7] p-3">
-              <label
-                htmlFor="category-filter"
-                className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#9a5c00]"
-              >
-                Kategori / Urun Filtrele
-              </label>
-              <div className="mt-2 flex gap-2">
-                <input
-                  id="category-filter"
-                  type="text"
-                  value={categoryFilterQuery}
-                  list="category-filter-suggestions"
-                  onChange={(event) => setCategoryFilterQuery(event.target.value)}
-                  placeholder="Kategori veya urun adi yaz..."
-                  className="h-10 w-full rounded-xl border border-black/10 bg-white px-3 text-sm text-[#111] outline-none ring-[#d97706] placeholder:text-[#9ca3af] focus:ring-2"
-                />
+            <div className="rounded-2xl border border-black/10 bg-[#fff8ef] p-2.5">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#9a5c00]">
+                Ana Kategoriler
+              </p>
+              <p className="mt-1 text-[11px] text-[#6b655c]">
+                Bir kategori kartini surukleyip bir ana kategori kutusuna birakin.
+              </p>
+              <div className="mt-1.5 flex gap-1.5">
+                <div className="relative w-[220px] max-w-full sm:w-[260px]">
+                  <svg
+                    viewBox="0 0 16 16"
+                    className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#9ca3af]"
+                    aria-hidden
+                  >
+                    <path
+                      d="M11.2 10.2 14 13m-3.5-6A4.5 4.5 0 1 1 1.5 7a4.5 4.5 0 0 1 9 0Z"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  <input
+                    id="category-filter"
+                    type="text"
+                    value={categoryFilterQuery}
+                    list="category-filter-suggestions"
+                    onChange={(event) => setCategoryFilterQuery(event.target.value)}
+                    placeholder="Ara..."
+                    className="h-7 w-full rounded-lg border border-black/10 bg-white pl-7 pr-2 text-[11px] text-[#111] outline-none ring-[#d97706] placeholder:text-[#9ca3af] focus:ring-2"
+                  />
+                </div>
                 {categoryFilterQuery.trim().length > 0 && (
                   <button
                     type="button"
                     onClick={() => setCategoryFilterQuery("")}
-                    className="h-10 shrink-0 rounded-xl border border-black/10 bg-white px-3 text-xs font-semibold uppercase tracking-[0.12em] text-[#6b655c] transition hover:bg-amber-50"
+                    className="h-7 shrink-0 rounded-lg border border-black/10 bg-white px-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#6b655c] transition hover:bg-amber-50"
                   >
                     Temizle
                   </button>
@@ -3708,11 +4394,139 @@ export default function HomePage() {
               </datalist>
               {isCategoryFilterActive && (
                 <p className="mt-2 text-xs text-[#6b655c]">
-                  {visibleCategories.length} kategori bulundu.
+                  {standaloneVisibleCategories.length} kategori bulundu.
                 </p>
               )}
+              <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                {displayedMainCategoryGroups.map((group) => {
+                  const isActiveDropZone = activeMainCategoryDropKey === group.key;
+                  const isSelected = selectedMainCategoryFilterKey === group.key;
+                  return (
+                    <div key={`main-category-drop-${group.key}`} className="inline-flex items-center gap-2">
+                      <div
+                        className={`inline-flex h-8 w-fit cursor-default select-none items-center gap-2 rounded-full border px-4 transition ${
+                          isActiveDropZone
+                            ? "border-[#d97706] bg-amber-100"
+                            : isSelected
+                              ? "border-[#b45309] bg-[#d97706] text-white shadow-[0_8px_18px_-14px_rgba(180,83,9,0.9)]"
+                            : "border-black/10 bg-white"
+                        }`}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() =>
+                          setSelectedMainCategoryFilterKey((current) =>
+                            current === group.key ? null : group.key
+                          )
+                        }
+                        onKeyDown={(event) => {
+                          if (event.key !== "Enter" && event.key !== " ") {
+                            return;
+                          }
+                          event.preventDefault();
+                          setSelectedMainCategoryFilterKey((current) =>
+                            current === group.key ? null : group.key
+                          );
+                        }}
+                        onDragOver={(event) => onMainCategoryDragOver(event, group.key)}
+                        onDragEnter={() => setActiveMainCategoryDropKey(group.key)}
+                        onDragLeave={() => {
+                          if (activeMainCategoryDropKey === group.key) {
+                            setActiveMainCategoryDropKey(null);
+                          }
+                        }}
+                        onDrop={(event) => onMainCategoryDrop(event, group.key)}
+                      >
+                        <p
+                          className={`truncate text-xs font-semibold uppercase leading-none tracking-[0.12em] ${
+                            isSelected ? "text-white" : "text-[#6b655c]"
+                          }`}
+                        >
+                          {group.label}
+                        </p>
+                        {group.key !== UNCATEGORIZED_MAIN_CATEGORY_KEY && (
+                          <>
+                            <button
+                              type="button"
+                              className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-amber-200 bg-amber-50 text-[#9a5c00] transition hover:bg-amber-100"
+                              onClick={(event) => onRenameMainCategoryClick(event, group.key)}
+                              title="Ana kategori adini degistir"
+                            >
+                              <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden>
+                                <path
+                                  d="M3 11.8 11.7 3a1.2 1.2 0 0 1 1.7 0l.3.3a1.2 1.2 0 0 1 0 1.7L5 13.8 2.5 14l.2-2.2Z"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="1.2"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                />
+                              </svg>
+                            </button>
+                            <button
+                              type="button"
+                              className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-rose-200 bg-rose-50 text-rose-700 transition hover:bg-rose-100"
+                              onClick={(event) => onDeleteMainCategoryClick(event, group.key)}
+                              title="Ana kategoriyi sil (kategoriler silinmez)"
+                            >
+                              <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden>
+                                <path
+                                  d="M3.2 4.5h9.6M6 4.5V3.4c0-.4.3-.7.7-.7h2.6c.4 0 .7.3.7.7v1.1M4.6 4.5l.6 7.8c0 .5.4.9.9.9h4c.5 0 .9-.4.9-.9l.6-7.8"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="1.2"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                />
+                              </svg>
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                <div className="ml-auto inline-flex items-center gap-2">
+                  {showInlineMainCategoryInput && (
+                    <input
+                      className="h-8 w-44 rounded-full border border-amber-300 bg-white px-3 text-xs text-[#111] outline-none ring-[#d97706] focus:ring-2"
+                      placeholder="Ana kategori adi"
+                      value={newMainCategoryDraft}
+                      autoFocus
+                      onChange={(event) => setNewMainCategoryDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          handleCreateMainCategory();
+                          return;
+                        }
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          setShowInlineMainCategoryInput(false);
+                          setNewMainCategoryDraft("");
+                        }
+                      }}
+                    />
+                  )}
+                  <button
+                    type="button"
+                    className={`h-8 rounded-full border border-[#0f766e] bg-[#14b8a6] px-4 text-[11px] font-semibold uppercase tracking-[0.12em] text-white transition hover:bg-[#0d9488] ${
+                      showInlineMainCategoryInput ? "ml-auto" : ""
+                    }`}
+                    onClick={() => {
+                      if (!showInlineMainCategoryInput) {
+                        setShowInlineMainCategoryInput(true);
+                        return;
+                      }
+                      handleCreateMainCategory();
+                    }}
+                    title="Ana kategori ekle"
+                  >
+                    {showInlineMainCategoryInput ? "Ekle" : "Ana Kategori Ekle"}
+                  </button>
+                </div>
+              </div>
             </div>
-            {visibleCategories.map((category) => (
+            {standaloneVisibleCategories.map((category) => (
               <div
                 key={category.id}
                 ref={(node) => {
@@ -3722,10 +4536,15 @@ export default function HomePage() {
                     categoryRefs.current.delete(category.id);
                   }
                 }}
+                draggable={!busy}
+                onDragStart={(event) => onCategoryDragStart(event, category.id)}
+                onDragEnd={onCategoryDragEnd}
                 className={`rounded-2xl border border-black/5 bg-[#f9f4ee] p-4 transition overflow-hidden ${
                   expandedCategoryId === category.id
                     ? "shadow-[0_20px_40px_-35px_rgba(0,0,0,0.5)]"
                     : ""
+                } ${
+                  draggedCategoryId === category.id ? "opacity-60" : ""
                 }`}
               >
                 <div
@@ -3743,23 +4562,92 @@ export default function HomePage() {
                     void handleToggleCategory(category);
                   }}
                 >
-                  <p
-                    className={`category-title text-lg transition-all ${
-                      expandedCategoryId === category.id
-                        ? "mx-auto text-center"
-                        : "text-left"
-                    }`}
-                  >
-                    {formatCategoryTitle(category.name)}
-                  </p>
+                  {editingCategoryId === category.id ? (
+                    <input
+                      className={`category-title h-9 rounded-xl border border-amber-300 bg-white px-3 text-lg text-[#111] outline-none ring-[#d97706] focus:ring-2 ${
+                        expandedCategoryId === category.id
+                          ? "mx-auto text-center"
+                          : "text-left"
+                      }`}
+                      value={editingCategoryName}
+                      autoFocus
+                      onClick={(event) => event.stopPropagation()}
+                      onChange={(event) => setEditingCategoryName(event.target.value)}
+                      onKeyDown={(event) => {
+                        event.stopPropagation();
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          void submitInlineCategoryRename(category);
+                          return;
+                        }
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          setEditingCategoryId(null);
+                          setEditingCategoryName("");
+                        }
+                      }}
+                      onBlur={() => {
+                        setEditingCategoryId(null);
+                        setEditingCategoryName("");
+                      }}
+                    />
+                  ) : (
+                    <p
+                      className={`category-title text-lg transition-all ${
+                        expandedCategoryId === category.id
+                          ? "mx-auto text-center"
+                          : "text-left"
+                      }`}
+                    >
+                      {formatCategoryTitle(category.name)}
+                    </p>
+                  )}
+                  {category.mainCategory && category.mainCategory.trim() && (
+                    <span className="ml-2 inline-flex items-center gap-1 rounded-full border border-[#f4d8aa] bg-[#fff4df] px-2 py-0.5 text-[11px] font-medium text-[#9a5c00]">
+                      {category.mainCategory}
+                      <button
+                        type="button"
+                        className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-amber-200 bg-amber-50 text-[#9a5c00] transition hover:bg-amber-100"
+                        onClick={(event) => {
+                          void handleRemoveCategoryFromMainCategory(event, category.id);
+                        }}
+                        title="Bu kategoriyi ana kategoriden cikar"
+                      >
+                        <svg viewBox="0 0 16 16" className="h-2.5 w-2.5" aria-hidden>
+                          <path
+                            d="M4 8h8"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.6"
+                            strokeLinecap="round"
+                          />
+                        </svg>
+                      </button>
+                    </span>
+                  )}
                   <div
                     className={`flex items-center gap-2 ${
                       expandedCategoryId === category.id ? "absolute right-0" : "ml-3"
                     }`}
                   >
-                    <span className="rounded-full border border-black/10 bg-white px-3 py-1 text-xs text-[#6b655c]">
-                      #{category.id}
-                    </span>
+                    <button
+                      type="button"
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-amber-200 bg-amber-50 text-[#9a5c00] transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      onClick={(event) => startInlineCategoryRename(event, category)}
+                      disabled={busy}
+                      title="Kategori adini degistir"
+                    >
+                      <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden>
+                        <path
+                          d="M3 11.8 11.7 3a1.2 1.2 0 0 1 1.7 0l.3.3a1.2 1.2 0 0 1 0 1.7L5 13.8 2.5 14l.2-2.2Z"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </button>
                     <button
                       type="button"
                       className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
@@ -3937,6 +4825,11 @@ export default function HomePage() {
                                         >
                                           <div className="min-w-0">
                                             <p className="truncate text-sm font-semibold text-[#111]">{item.name}</p>
+                                            {getProductQuantityText(item) && (
+                                              <p className="truncate text-[11px] text-[#6b655c]">
+                                                {getProductQuantityText(item)}
+                                              </p>
+                                            )}
                                             <p className="truncate text-xs text-[#6b655c]">
                                               {item.marketplaceCode === "YS" ? "Yemeksepeti" : "Migros"} |{" "}
                                               {item.brandName || "Marka yok"}
@@ -3994,6 +4887,20 @@ export default function HomePage() {
                             );
                           })()}
                         </div>
+                      {manualMatchSource && manualMatchSource.categoryId === category.id && (
+                        <div className="mt-3 rounded-2xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-[#9a5c00]">
+                          <span className="font-semibold">Eslestirme modu:</span>{" "}
+                          {manualMatchSource.name} secildi. Simdi{" "}
+                          {manualMatchSource.marketplaceCode === "YS" ? "Migros" : "Yemeksepeti"} tarafindan hedef urunu sec.
+                          <button
+                            type="button"
+                            className="ml-2 rounded-lg border border-black/10 bg-white px-2 py-0.5 text-[11px] font-semibold text-[#6b655c] transition hover:bg-[#f4ede3]"
+                            onClick={() => setManualMatchSource(null)}
+                          >
+                            Iptal
+                          </button>
+                        </div>
+                      )}
                       <div className="hidden gap-3 xl:grid xl:grid-cols-2">
                         {marketplaceSections.map((section) => {
                         const sectionCandidatesRaw = activeCandidates.filter(
@@ -4145,7 +5052,7 @@ export default function HomePage() {
                                       )}
                                       <div className="relative h-10 w-10 overflow-hidden rounded-xl border border-black/10 bg-white">
                                         {item.imageUrl ? (
-                                          <Image src={item.imageUrl} alt={item.name} fill sizes="40px" className="object-cover" />
+                                          <Image src={item.imageUrl} alt={item.name} fill sizes="40px" className="object-cover" unoptimized />
                                         ) : (
                                           <div className="flex h-full w-full items-center justify-center text-[10px] text-[#6b655c]">
                                             Gorsel yok
@@ -4156,6 +5063,11 @@ export default function HomePage() {
                                         <p className="truncate text-sm font-semibold text-[#111]">
                                           {item.name || `Urun ${item.externalId}`}
                                         </p>
+                                        {getProductQuantityText(item) && (
+                                          <p className="truncate text-[11px] text-[#6b655c]">
+                                            {getProductQuantityText(item)}
+                                          </p>
+                                        )}
                                         <p className="truncate text-xs text-[#554f47]">
                                           {item.brandName || "Marka yok"}
                                           {formatMarketplacePriceSuffix(
@@ -4312,6 +5224,14 @@ export default function HomePage() {
                               addedCandidateIds={addedCandidateIds}
                               expandedLists={expandedLists}
                               onAddCandidate={handleAddCandidateProduct}
+                              manualMatchSource={manualMatchSource}
+                              manualMatchBusy={manualMatchBusy}
+                              onStartManualMatch={handleStartManualMatchFromCandidate}
+                              onSelectManualMatchTarget={handleSelectManualMatchTarget}
+                              onRemoveManualMatch={handleRemoveManualMatchFromCandidate}
+                              isNeedProductAddedForCandidate={isNeedProductAddedForCandidate}
+                              onToggleNeedForCandidate={handleToggleNeedForCandidate}
+                              suggestedMatchPairByKey={suggestedMatchPairByKey}
                               onToggleList={toggleList}
                               onDragStartCandidate={onCandidateDragStart}
                             />
@@ -4332,7 +5252,10 @@ export default function HomePage() {
             ))}
             {!isCategoryFilterActive &&
               currentCategoryPage === 0 &&
-              pagedCategories.length > CATEGORY_VISIBLE_COUNT && (
+              (selectedMainCategoryFilterKey
+                ? pagedCategories.length > CATEGORY_VISIBLE_COUNT
+                : pagedCategories.filter((category) => !(category.mainCategory ?? "").trim()).length >
+                  CATEGORY_VISIBLE_COUNT) && (
               <button
                 type="button"
                 className="w-full rounded-2xl border border-black/10 bg-white px-4 py-2 text-xs uppercase tracking-[0.2em] text-[#9a5c00] transition hover:bg-amber-50"
@@ -4347,6 +5270,11 @@ export default function HomePage() {
                   type="button"
                   className="rounded-xl border border-black/10 bg-white px-3 py-1.5 text-xs font-semibold text-[#6b655c] transition hover:bg-[#f4ede3] disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={() => {
+                    if (expandedCategoryId !== null) {
+                      setExpandedCategoryId(null);
+                      setSelectedAddedProduct(null);
+                      setSelectedProductCategory(null);
+                    }
                     setCategoryPage((prev) => Math.max(0, prev - 1));
                     setShowAllCategories(false);
                   }}
@@ -4361,6 +5289,11 @@ export default function HomePage() {
                   type="button"
                   className="rounded-xl border border-black/10 bg-white px-3 py-1.5 text-xs font-semibold text-[#6b655c] transition hover:bg-[#f4ede3] disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={() => {
+                    if (expandedCategoryId !== null) {
+                      setExpandedCategoryId(null);
+                      setSelectedAddedProduct(null);
+                      setSelectedProductCategory(null);
+                    }
                     setCategoryPage((prev) => Math.min(categoryTotalPages - 1, prev + 1));
                     setShowAllCategories(false);
                   }}
@@ -4398,87 +5331,87 @@ export default function HomePage() {
           </div>
           {!isInfoSectionCollapsed && (
           <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-            <div className="rounded-2xl border border-black/10 bg-[#f9f4ee] p-3">
-              <p className="text-[11px] uppercase tracking-[0.16em] text-[#9a5c00]">
+            <div className="rounded-2xl border border-black/5 bg-[linear-gradient(160deg,#fffdf1_0%,#fff6b8_100%)] p-3 shadow-[0_8px_20px_-16px_rgba(0,0,0,0.35)]">
+              <p className="text-[11px] uppercase tracking-[0.16em] text-[#7c3f00]">
                 Efektif Fiyat
               </p>
-              <p className="mt-2 text-sm text-[#6b655c]">
+              <p className="mt-2 text-sm text-[#4f4a44]">
                 Money uyesi indirimi ve kampanyali adet fiyati varsa tekil birim
                 maliyetini hesaplar. Ayarlarda acik ise karsilastirmalarda bu
                 fiyat kullanilir.
               </p>
             </div>
-            <div className="rounded-2xl border border-black/10 bg-[#f9f4ee] p-3">
-              <p className="text-[11px] uppercase tracking-[0.16em] text-[#9a5c00]">
+            <div className="rounded-2xl border border-black/5 bg-[linear-gradient(160deg,#fff8f2_0%,#ffd6b3_100%)] p-3 shadow-[0_8px_20px_-16px_rgba(0,0,0,0.35)]">
+              <p className="text-[11px] uppercase tracking-[0.16em] text-[#7c3f00]">
                 Ayarlar
               </p>
-              <p className="mt-2 text-sm text-[#6b655c]">
+              <p className="mt-2 text-sm text-[#4f4a44]">
                 Money Uyelik acildiginda Migros Money fiyatlari baz alinir.
                 Efektif Fiyat acildiginda kampanyalar tekil fiyata indirgenir.
               </p>
             </div>
-            <div className="rounded-2xl border border-black/10 bg-[#f9f4ee] p-3">
-              <p className="text-[11px] uppercase tracking-[0.16em] text-[#9a5c00]">
+            <div className="rounded-2xl border border-black/5 bg-[linear-gradient(160deg,#fff6f6_0%,#f6a9a9_100%)] p-3 shadow-[0_8px_20px_-16px_rgba(0,0,0,0.35)]">
+              <p className="text-[11px] uppercase tracking-[0.16em] text-[#7c3f00]">
                 Ihtiyac Listesi
               </p>
-              <p className="mt-2 text-sm text-[#6b655c]">
+              <p className="mt-2 text-sm text-[#4f4a44]">
                 Urun modalinda &quot;Ihtiyac Listesine Ekle&quot; urunu,
                 &quot;Kategoriyi Ihtiyac Listesine Ekle&quot; tum kategoriyi
                 listeye ekler.
               </p>
             </div>
-            <div className="rounded-2xl border border-black/10 bg-[#f9f4ee] p-3">
-              <p className="text-[11px] uppercase tracking-[0.16em] text-[#9a5c00]">
+            <div className="rounded-2xl border border-black/5 bg-[linear-gradient(160deg,#fffdf1_0%,#fff6b8_100%)] p-3 shadow-[0_8px_20px_-16px_rgba(0,0,0,0.35)]">
+              <p className="text-[11px] uppercase tracking-[0.16em] text-[#7c3f00]">
                 Sepet Onerileri
               </p>
-              <p className="mt-2 text-sm text-[#6b655c]">
+              <p className="mt-2 text-sm text-[#4f4a44]">
                 Ihtiyac listesine gore zorunlu onerileri ve ihtiyac disi genel
                 firsat onerilerini ayri katmanlarda sunar. Minimum sepet tutari
                 icin gerekli ek urun ihtiyacini gosterir.
               </p>
             </div>
-            <div className="rounded-2xl border border-black/10 bg-[#f9f4ee] p-3">
-              <p className="text-[11px] uppercase tracking-[0.16em] text-[#9a5c00]">
+            <div className="rounded-2xl border border-black/5 bg-[linear-gradient(160deg,#fff8f2_0%,#ffd6b3_100%)] p-3 shadow-[0_8px_20px_-16px_rgba(0,0,0,0.35)]">
+              <p className="text-[11px] uppercase tracking-[0.16em] text-[#7c3f00]">
                 Ihtiyactan Onerilenler
               </p>
-              <p className="mt-2 text-sm text-[#6b655c]">
+              <p className="mt-2 text-sm text-[#4f4a44]">
                 Ihtiyac listesinde olan urun/kategorilerden uretilir. Aciliyet
                 ve alinabilirlik skoruna gore onceliklendirilir.
               </p>
             </div>
-            <div className="rounded-2xl border border-black/10 bg-[#f9f4ee] p-3">
-              <p className="text-[11px] uppercase tracking-[0.16em] text-[#9a5c00]">
+            <div className="rounded-2xl border border-black/5 bg-[linear-gradient(160deg,#fff6f6_0%,#f6a9a9_100%)] p-3 shadow-[0_8px_20px_-16px_rgba(0,0,0,0.35)]">
+              <p className="text-[11px] uppercase tracking-[0.16em] text-[#7c3f00]">
                 Genel Firsatlar
               </p>
-              <p className="mt-2 text-sm text-[#6b655c]">
+              <p className="mt-2 text-sm text-[#4f4a44]">
                 Ihtiyac listesinde olmayan ama fiyat seviyesi dusuk veya kampanyali
                 gorunen urunleri gosterir. Zorunlu degil, firsat odaklidir.
               </p>
             </div>
-            <div className="rounded-2xl border border-black/10 bg-[#f9f4ee] p-3">
-              <p className="text-[11px] uppercase tracking-[0.16em] text-[#9a5c00]">
+            <div className="rounded-2xl border border-black/5 bg-[linear-gradient(160deg,#fffdf1_0%,#fff6b8_100%)] p-3 shadow-[0_8px_20px_-16px_rgba(0,0,0,0.35)]">
+              <p className="text-[11px] uppercase tracking-[0.16em] text-[#7c3f00]">
                 Alinabilirlik
               </p>
-              <p className="mt-2 text-sm text-[#6b655c]">
+              <p className="mt-2 text-sm text-[#4f4a44]">
                 Son fiyat gecmisi icindeki siralama ve bugunku fiyatin konumu
                 kullanilarak hesaplanir. Skor &gt;= 65 Uygun, 40-64 Normal, 40
                 altinda Pahali. Skor yoksa Normal kabul edilir.
               </p>
             </div>
-            <div className="rounded-2xl border border-black/10 bg-[#f9f4ee] p-3">
-              <p className="text-[11px] uppercase tracking-[0.16em] text-[#9a5c00]">
+            <div className="rounded-2xl border border-black/5 bg-[linear-gradient(160deg,#fff8f2_0%,#ffd6b3_100%)] p-3 shadow-[0_8px_20px_-16px_rgba(0,0,0,0.35)]">
+              <p className="text-[11px] uppercase tracking-[0.16em] text-[#7c3f00]">
                 Marketler
               </p>
-              <p className="mt-2 text-sm text-[#6b655c]">
+              <p className="mt-2 text-sm text-[#4f4a44]">
                 Desteklenen marketler: Yemeksepeti (YS) ve Migros (MG). Urunler
                 her market icin ayri baglanir.
               </p>
             </div>
-            <div className="rounded-2xl border border-black/10 bg-[#f9f4ee] p-3">
-              <p className="text-[11px] uppercase tracking-[0.16em] text-[#9a5c00]">
+            <div className="rounded-2xl border border-black/5 bg-[linear-gradient(160deg,#fff6f6_0%,#f6a9a9_100%)] p-3 shadow-[0_8px_20px_-16px_rgba(0,0,0,0.35)]">
+              <p className="text-[11px] uppercase tracking-[0.16em] text-[#7c3f00]">
                 Ihtiyac Aciliyeti
               </p>
-              <p className="mt-2 text-sm text-[#6b655c]">
+              <p className="mt-2 text-sm text-[#4f4a44]">
                 Acil / Normal / Acil Degil secimi, sepet onerilerindeki oncelik
                 sirasini ve alinabilirlik sinyallerini etkiler.
               </p>
@@ -4586,7 +5519,99 @@ export default function HomePage() {
         onAddActiveCategoryToNeedListAction={() => undefined}
         historyCountLabel={`${rangeFilteredHistory.length}/${compactHistory.length} kayit`}
         historyContent={historyContent}
+        manualMatchOptions={manualMatchOptions}
+        onCreateManualMatchAction={handleCreateManualMatch}
+        manualMatchBusy={manualMatchBusy}
       />
+
+      {showMainCategoryModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="w-full max-w-md rounded-3xl border border-black/10 bg-white p-6 shadow-[0_30px_80px_-40px_rgba(0,0,0,0.55)]">
+            <div className="flex items-center justify-between">
+              <h3 className="display text-xl">Ana Kategori Yonetimi</h3>
+              <button
+                className="text-sm text-[#6b655c] transition hover:text-[#111]"
+                type="button"
+                onClick={() => setShowMainCategoryModal(false)}
+              >
+                Kapat
+              </button>
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-black/10 bg-[#fcfaf7] p-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#9a5c00]">
+                Yeni Ana Kategori
+              </p>
+              <div className="mt-2 flex gap-2">
+                <input
+                  className="h-10 w-full rounded-xl border border-black/10 bg-white px-3 text-sm focus:border-amber-400 focus:outline-none focus:ring-4 focus:ring-(--ring)"
+                  placeholder="Ana kategori adi"
+                  value={newMainCategoryDraft}
+                  onChange={(event) => setNewMainCategoryDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" || busy) {
+                      return;
+                    }
+                    event.preventDefault();
+                    handleCreateMainCategory();
+                  }}
+                />
+                <button
+                  className="h-10 shrink-0 rounded-xl bg-[#d97706] px-3 text-xs font-semibold uppercase tracking-[0.12em] text-white transition hover:bg-[#b45309] disabled:cursor-not-allowed disabled:opacity-60"
+                  type="button"
+                  onClick={handleCreateMainCategory}
+                  disabled={busy}
+                >
+                  Ekle
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-3 rounded-2xl border border-black/10 bg-[#fcfaf7] p-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#9a5c00]">
+                Ana Kategori Adi Degistir
+              </p>
+              <select
+                className="mt-2 h-10 w-full rounded-xl border border-black/10 bg-white px-3 text-sm text-[#111] outline-none ring-[#d97706] focus:ring-2"
+                value={renameMainCategorySource}
+                onChange={(event) => setRenameMainCategorySource(event.target.value)}
+              >
+                <option value="">Ana kategori secin</option>
+                {mainCategoryOptions.map((option) => (
+                  <option key={`main-category-rename-${option}`} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+              <input
+                className="mt-2 h-10 w-full rounded-xl border border-black/10 bg-white px-3 text-sm focus:border-amber-400 focus:outline-none focus:ring-4 focus:ring-(--ring)"
+                placeholder="Yeni ad"
+                value={renameMainCategoryTarget}
+                onChange={(event) => setRenameMainCategoryTarget(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" || busy) {
+                    return;
+                  }
+                  event.preventDefault();
+                  void handleRenameMainCategory();
+                }}
+              />
+              <div className="mt-3 flex justify-end">
+                <button
+                  className="rounded-xl bg-[#d97706] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#b45309] disabled:cursor-not-allowed disabled:opacity-60"
+                  type="button"
+                  onClick={() => {
+                    void handleRenameMainCategory();
+                  }}
+                  disabled={busy || mainCategoryOptions.length === 0}
+                >
+                  Kaydet
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showAddCategory && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
@@ -4602,7 +5627,7 @@ export default function HomePage() {
               </button>
             </div>
             <p className="mt-1 text-xs text-[#6b655c]">
-              Eklemek istediginiz kategori adini yazin.
+              Eklemek istediginiz kategori adini ve opsiyonel ana kategoriyi yazin.
             </p>
             <input
               className="mt-4 w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-sm focus:border-amber-400 focus:outline-none focus:ring-4 focus:ring-(--ring)"
@@ -4617,6 +5642,18 @@ export default function HomePage() {
                 void handleCreateCategory();
               }}
             />
+            <input
+              className="mt-3 w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-sm focus:border-amber-400 focus:outline-none focus:ring-4 focus:ring-(--ring)"
+              placeholder="Ana kategori (opsiyonel)"
+              value={mainCategoryName}
+              list="main-category-suggestions"
+              onChange={(event) => setMainCategoryName(event.target.value)}
+            />
+            <datalist id="main-category-suggestions">
+              {mainCategoryOptions.map((option) => (
+                <option key={`main-category-option-${option}`} value={option} />
+              ))}
+            </datalist>
             <div className="mt-4 flex justify-end gap-2">
               <button
                 className="rounded-xl border border-black/10 px-4 py-2 text-sm text-[#6b655c] transition hover:bg-[#f4ede3]"
@@ -4640,7 +5677,7 @@ export default function HomePage() {
 
       {headerActionsEl &&
         createPortal(
-          <>
+          <div className="relative z-[70] flex items-start gap-2">
             <div
               className="relative"
               onMouseEnter={() => {
@@ -4661,7 +5698,16 @@ export default function HomePage() {
                 title="Ayarlar"
                 aria-label="Ayarlar"
               >
-                ⚙️
+                <svg viewBox="0 0 16 16" className="h-5 w-5 text-[#6b655c]" aria-hidden>
+                  <path
+                    d="M9.9 1.6 10.3 3a5.3 5.3 0 0 1 1.2.7l1.3-.5 1 1.8-1.1.9c.1.4.1.8.1 1.2s0 .8-.1 1.2l1.1.9-1 1.8-1.3-.5a5.3 5.3 0 0 1-1.2.7l-.4 1.4H7.7l-.4-1.4a5.3 5.3 0 0 1-1.2-.7l-1.3.5-1-1.8 1.1-.9A5 5 0 0 1 4.8 8c0-.4 0-.8.1-1.2L3.8 5.9l1-1.8 1.3.5c.4-.3.8-.5 1.2-.7l.4-1.4h2.2ZM8.8 10.1a2.1 2.1 0 1 0 0-4.2 2.1 2.1 0 0 0 0 4.2Z"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
               </button>
               <div
                 className={`absolute right-0 top-12 w-[min(20rem,calc(100vw-1.5rem))] rounded-2xl border border-black/10 bg-white p-3 text-xs shadow-[0_20px_45px_-28px_rgba(0,0,0,0.45)] ${
@@ -4758,16 +5804,23 @@ export default function HomePage() {
               </div>
             </div>
             <div className="group relative">
-              <button
-                type="button"
+              <a
+                href="/needs"
                 className="flex h-11 w-11 items-center justify-center rounded-2xl border border-black/10 bg-white text-xl shadow-[0_12px_30px_-20px_rgba(0,0,0,0.45)] transition hover:bg-amber-50"
-                onClick={() => {
-                  window.location.href = "/needs";
-                }}
+                onClick={() => navigateToPage("/needs")}
                 title="Ihtiyac Listesi"
               >
-                📝
-              </button>
+                <svg viewBox="0 0 16 16" className="h-5 w-5 text-[#6b655c]" aria-hidden>
+                  <path
+                    d="M4 3.2h8m-8 3h8m-8 3h5M2.8 1.8h10.4c.6 0 1 .4 1 1v10.4c0 .6-.4 1-1 1H2.8a1 1 0 0 1-1-1V2.8c0-.6.4-1 1-1Z"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </a>
               <div className="absolute right-0 top-12 hidden w-[min(18rem,calc(100vw-1.5rem))] rounded-2xl border border-black/10 bg-white p-3 text-xs shadow-[0_20px_45px_-28px_rgba(0,0,0,0.45)] group-hover:block">
                 <p className="text-[10px] uppercase tracking-[0.18em] text-[#9a5c00]">
                   Ihtiyac Listesi
@@ -4778,7 +5831,7 @@ export default function HomePage() {
                   ) : (
                     needList.slice(0, 5).map((item) => (
                       <p key={`need-preview-${item.key}`} className="text-[#334155]">
-                        {item.name}
+                        {formatProductNameWithQuantity(item)}
                       </p>
                     ))
                   )}
@@ -4787,7 +5840,7 @@ export default function HomePage() {
                   type="button"
                   className="mt-2 rounded-lg border border-black/10 bg-[#f9f4ee] px-2 py-1 text-[11px] text-[#6b655c]"
                   onClick={() => {
-                    window.location.href = "/needs";
+                    navigateToPage("/needs");
                   }}
                 >
                   Tum Listeyi Gor
@@ -4795,21 +5848,28 @@ export default function HomePage() {
               </div>
             </div>
             <div className="group relative">
-              <button
-                type="button"
+              <a
+                href="/basket"
                 className="relative flex h-11 w-11 items-center justify-center rounded-2xl border border-black/10 bg-white text-xl shadow-[0_12px_30px_-20px_rgba(0,0,0,0.45)] transition hover:bg-amber-50"
-                onClick={() => {
-                  window.location.href = "/basket";
-                }}
+                onClick={() => navigateToPage("/basket")}
                 title="Sepet Onerileri"
               >
-                🛒
+                <svg viewBox="0 0 16 16" className="h-5 w-5 text-[#6b655c]" aria-hidden>
+                  <path
+                    d="M2.2 3h1.7l1 6h6.5l1.2-4.3H4.1M6.3 12.7a.9.9 0 1 1 0-1.8.9.9 0 0 1 0 1.8Zm4.6 0a.9.9 0 1 1 0-1.8.9.9 0 0 1 0 1.8Z"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
                 {basketSuggestionCount > 0 && (
                   <span className="absolute -bottom-1 -right-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[#d97706] px-1 text-[10px] font-semibold text-white">
                     {basketSuggestionCount}
                   </span>
                 )}
-              </button>
+              </a>
               <div className="absolute right-0 top-12 hidden w-[min(20rem,calc(100vw-1.5rem))] rounded-2xl border border-black/10 bg-white p-3 text-xs shadow-[0_20px_45px_-28px_rgba(0,0,0,0.45)] group-hover:block">
                 <p className="text-[10px] uppercase tracking-[0.18em] text-[#9a5c00]">
                   Sepet Onerileri
@@ -4829,7 +5889,7 @@ export default function HomePage() {
                           ) : (
                             basketSuggestionPreviewByMarketplace.MG.map((item) => (
                               <p key={`basket-preview-mg-${item.key}`} className="text-[#14532d]">
-                                {item.name}
+                                {formatProductNameWithQuantity(item)}
                               </p>
                             ))
                           )}
@@ -4845,7 +5905,7 @@ export default function HomePage() {
                           ) : (
                             basketSuggestionPreviewByMarketplace.YS.map((item) => (
                               <p key={`basket-preview-ys-${item.key}`} className="text-[#14532d]">
-                                {item.name}
+                                {formatProductNameWithQuantity(item)}
                               </p>
                             ))
                           )}
@@ -4869,18 +5929,18 @@ export default function HomePage() {
                   type="button"
                   className="mt-2 rounded-lg border border-black/10 bg-[#f9f4ee] px-2 py-1 text-[11px] text-[#6b655c]"
                   onClick={() => {
-                    window.location.href = "/basket";
+                    navigateToPage("/basket");
                   }}
                 >
                   Tum Sepeti Gor
                 </button>
               </div>
             </div>
-          </>,
+          </div>,
           headerActionsEl
         )}
 
-      <div className="pointer-events-none fixed left-3 right-3 top-24 z-50 flex w-auto flex-col gap-2 sm:left-auto sm:right-6 sm:w-[320px]">
+      <div className="pointer-events-none fixed left-3 right-3 top-24 z-40 flex w-auto flex-col gap-2 sm:left-auto sm:right-6 sm:w-[320px]">
         {notices.map((notice) => (
           <div
             key={notice.id}

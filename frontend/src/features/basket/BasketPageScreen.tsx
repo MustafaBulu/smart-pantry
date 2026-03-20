@@ -1323,7 +1323,7 @@ export default function BasketPage() {
     >
       <div className="relative h-9 w-9 overflow-hidden rounded-md border border-black/10 bg-[#f3f4f6]">
         {item.imageUrl ? (
-          <Image src={item.imageUrl} alt={item.name} fill sizes="36px" className="object-cover" />
+          <Image src={item.imageUrl} alt={item.name} fill sizes="36px" className="object-cover" unoptimized />
         ) : null}
       </div>
       <div className="min-w-0 flex-1">
@@ -1352,6 +1352,7 @@ export default function BasketPage() {
             fill
             sizes="36px"
             className="object-cover"
+            unoptimized
           />
         ) : null}
       </div>

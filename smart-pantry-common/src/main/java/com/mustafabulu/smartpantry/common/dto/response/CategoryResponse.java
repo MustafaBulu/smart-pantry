@@ -7,6 +7,11 @@ public record CategoryResponse(
         @Schema(description = "Category id", example = "1")
         Long id,
         @Schema(description = "Category name", example = "Snacks")
-        String name
+        String name,
+        @Schema(description = "Optional main category/group name", example = "Temel Gida")
+        String mainCategory
 ) {
+    public CategoryResponse(Long id, String name) {
+        this(id, name, null);
+    }
 }

@@ -1,0 +1,1281 @@
+package com.mustafabulu.smartpantry.common.service;
+
+import com.mustafabulu.smartpantry.common.dto.response.MarketplaceProductCandidateResponse;
+import com.mustafabulu.smartpantry.common.dto.response.MarketplaceProductMatchPairResponse;
+import com.mustafabulu.smartpantry.common.dto.response.MarketplaceProductMatchScoreResponse;
+import com.mustafabulu.smartpantry.common.model.ImageSignatureCache;
+import com.mustafabulu.smartpantry.common.repository.ImageSignatureCacheRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.tartarus.snowball.ext.TurkishStemmer;
+
+import javax.imageio.ImageIO;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.math.BigDecimal;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.text.Normalizer;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+@Service
+public class CrossPlatformProductMatcherService {
+
+    private static final Locale TR = Locale.forLanguageTag("tr-TR");
+    private static final Set<String> NAME_STOP_WORDS = Set.of(
+            "ve", "ile", "icin", "pet", "paket", "adet", "sise", "kutu", "boy", "mini", "maxi"
+    );
+    private static final Set<String> NLP_NOISE_TOKENS = Set.of(
+            "pet", "sise", "sisede", "siseli", "cam", "bardak", "kutu", "paket", "paketi", "adet",
+            "pratik", "prtc", "ekonomik", "firsat", "kampanya", "boy", "mini", "maxi"
+    );
+    private static final Map<String, String> NLP_LEMMA_MAP = Map.ofEntries(
+            Map.entry("lt", "l"),
+            Map.entry("litre", "l"),
+            Map.entry("litrelik", "l"),
+            Map.entry("gr", "g"),
+            Map.entry("gram", "g"),
+            Map.entry("kg", "kg"),
+            Map.entry("sisede", "sise"),
+            Map.entry("siseli", "sise"),
+            Map.entry("sis", "sise"),
+            Map.entry("sisesi", "sise"),
+            Map.entry("pratiksise", "sise")
+    );
+    private static final Pattern COMBO_QUANTITY_PATTERN =
+            Pattern.compile("(\\d+)\\s*[xX]\\s*(\\d+(?:[.,]\\d+)?)\\s*(kg|gr|g|ml|lt|l)\\b");
+    private static final Pattern PACK_PATTERN =
+            Pattern.compile("(\\d+)\\s*(?:['’]?(?:li|lı|lu|lü)|pack|paket)\\b", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    private static final Pattern AMOUNT_PATTERN =
+            Pattern.compile("(\\d+(?:[.,]\\d+)?)\\s*(kg|gr|g|ml|lt|l)\\b");
+    private static final Pattern FAT_PERCENT_PATTERN =
+            Pattern.compile("%?\\s*(\\d+(?:[.,]\\d+)?)\\s*yag");
+    private static final int NLP_TOKEN_CACHE_MAX_SIZE = 20_000;
+    private static final Map<String, String> NLP_TOKEN_CACHE = new ConcurrentHashMap<>();
+    private static final Duration IMAGE_CONNECT_TIMEOUT = Duration.ofMillis(700);
+    private static final Duration IMAGE_REQUEST_TIMEOUT = Duration.ofMillis(1200);
+    private static final double AMBIGUOUS_IMAGE_MIN_SCORE = 0.72d;
+    private static final HttpClient IMAGE_HTTP_CLIENT = HttpClient.newBuilder()
+            .followRedirects(HttpClient.Redirect.NORMAL)
+            .connectTimeout(IMAGE_CONNECT_TIMEOUT)
+            .build();
+    private static final int PROCESS_IMAGE_CACHE_MAX_SIZE = 8_000;
+    private static final Map<String, CachedImageSignature> PROCESS_IMAGE_CACHE = new ConcurrentHashMap<>();
+
+    private final ImageSignatureCacheRepository imageSignatureCacheRepository;
+
+    public CrossPlatformProductMatcherService() {
+        this.imageSignatureCacheRepository = null;
+    }
+
+    @Autowired
+    public CrossPlatformProductMatcherService(ImageSignatureCacheRepository imageSignatureCacheRepository) {
+        this.imageSignatureCacheRepository = imageSignatureCacheRepository;
+    }
+
+    public List<MarketplaceProductMatchPairResponse> buildMarketplacePairs(
+            List<MarketplaceProductCandidateResponse> ys,
+            List<MarketplaceProductCandidateResponse> mg,
+            double minScore
+    ) {
+        if (ys == null || mg == null || ys.isEmpty() || mg.isEmpty()) {
+            return List.of();
+        }
+        Map<String, ImageSignature> imageSignatureCache = new HashMap<>();
+        Map<String, Integer> ysGroupCounts = countBrandQuantityGroups(ys);
+        Map<String, Integer> mgGroupCounts = countBrandQuantityGroups(mg);
+        List<MarketplaceProductMatchPairResponse> candidates = new ArrayList<>();
+        for (MarketplaceProductCandidateResponse ysItem : ys) {
+            String ysGroupKey = brandQuantityGroupKey(ysItem);
+            for (MarketplaceProductCandidateResponse mgItem : mg) {
+                MarketplaceProductMatchScoreResponse score = scoreCandidatePair(
+                        ysItem,
+                        mgItem,
+                        imageSignatureCache
+                );
+                if (score == null || score.score() < minScore) {
+                    continue;
+                }
+                String mgGroupKey = brandQuantityGroupKey(mgItem);
+                boolean ambiguous = ysGroupCounts.getOrDefault(ysGroupKey, 0) > 1
+                        || mgGroupCounts.getOrDefault(mgGroupKey, 0) > 1;
+                if (ambiguous) {
+                    double imageScore = imageSimilarity(safe(ysItem.imageUrl()), safe(mgItem.imageUrl()), imageSignatureCache);
+                    boolean strongBrandMatch = brandSimilarity(inferBrand(ysItem), inferBrand(mgItem)) >= 0.92d;
+                    if (!strongBrandMatch && imageScore < AMBIGUOUS_IMAGE_MIN_SCORE) {
+                        continue;
+                    }
+                    score = new MarketplaceProductMatchScoreResponse(
+                            score.score(),
+                            score.nameScore(),
+                            score.coreNameScore(),
+                            score.phraseScore(),
+                            score.quantityScore(),
+                            score.brandScore(),
+                            Math.max(score.imageScore(), imageScore),
+                            score.priceScore(),
+                            score.profileScore()
+                    );
+                }
+                candidates.add(
+                        new MarketplaceProductMatchPairResponse(
+                                ysItem,
+                                mgItem,
+                                score,
+                                false,
+                                false
+                        )
+                );
+            }
+        }
+
+        candidates.sort((left, right) -> {
+            int byScore = Double.compare(right.score().score(), left.score().score());
+            if (byScore != 0) {
+                return byScore;
+            }
+            int byImage = Double.compare(right.score().imageScore(), left.score().imageScore());
+            if (byImage != 0) {
+                return byImage;
+            }
+            int byName = Double.compare(right.score().nameScore(), left.score().nameScore());
+            if (byName != 0) {
+                return byName;
+            }
+            int byPhrase = Double.compare(right.score().phraseScore(), left.score().phraseScore());
+            if (byPhrase != 0) {
+                return byPhrase;
+            }
+            String leftKey = normalizeExternalId(left.ys().externalId()) + "|" + normalizeExternalId(left.mg().externalId());
+            String rightKey = normalizeExternalId(right.ys().externalId()) + "|" + normalizeExternalId(right.mg().externalId());
+            return leftKey.compareTo(rightKey);
+        });
+
+        Set<String> usedYs = new LinkedHashSet<>();
+        Set<String> usedMg = new LinkedHashSet<>();
+        List<MarketplaceProductMatchPairResponse> selected = new ArrayList<>();
+        for (MarketplaceProductMatchPairResponse pair : candidates) {
+            String ysKey = normalizeExternalId(pair.ys().externalId());
+            String mgKey = normalizeExternalId(pair.mg().externalId());
+            if (usedYs.contains(ysKey) || usedMg.contains(mgKey)) {
+                continue;
+            }
+            usedYs.add(ysKey);
+            usedMg.add(mgKey);
+            selected.add(pair);
+        }
+        List<MarketplaceProductMatchPairResponse> finalized = new ArrayList<>();
+        for (MarketplaceProductMatchPairResponse pair : selected) {
+            double margin = computePairMargin(pair, candidates);
+            boolean autoLinkEligible = shouldAutoLinkCandidates(
+                    pair.score(),
+                    margin
+            );
+            finalized.add(new MarketplaceProductMatchPairResponse(
+                    pair.ys(),
+                    pair.mg(),
+                    pair.score(),
+                    autoLinkEligible,
+                    false
+            ));
+        }
+        return finalized;
+    }
+
+    private Map<String, Integer> countBrandQuantityGroups(List<MarketplaceProductCandidateResponse> items) {
+        Map<String, Integer> counts = new HashMap<>();
+        for (MarketplaceProductCandidateResponse item : items) {
+            String key = brandQuantityGroupKey(item);
+            if (key.isBlank()) {
+                continue;
+            }
+            counts.merge(key, 1, Integer::sum);
+        }
+        return counts;
+    }
+
+    private String brandQuantityGroupKey(MarketplaceProductCandidateResponse candidate) {
+        String brand = inferBrand(candidate);
+        QuantityInfo quantity = parseQuantityInfo(candidate);
+        if (brand.isBlank() || quantity.amount() == null || quantity.unit() == null) {
+            return "";
+        }
+        String canonicalUnit = switch (quantity.unit()) {
+            case "g", "ml" -> "gml";
+            default -> quantity.unit();
+        };
+        long roundedAmount = Math.round(quantity.amount());
+        return brand + "|" + canonicalUnit + "|" + roundedAmount;
+    }
+
+    private boolean shouldAutoLinkCandidates(
+            MarketplaceProductMatchScoreResponse match,
+            double margin
+    ) {
+        return match.score() >= 0.86d
+                && match.coreNameScore() >= 0.62d
+                && match.quantityScore() >= 0.98d
+                && match.brandScore() >= 0.35d
+                && match.profileScore() >= 0.60d
+                && margin >= 0.08d;
+    }
+
+    private MarketplaceProductMatchScoreResponse scoreCandidatePair(
+            MarketplaceProductCandidateResponse source,
+            MarketplaceProductCandidateResponse target,
+            Map<String, ImageSignature> imageSignatureCache
+    ) {
+        // Gate first: quantity and brand must stay consistent.
+        Compatibility quantity = compareQuantity(source, target);
+        if (!quantity.compatible()) {
+            return null;
+        }
+
+        String sourceBrand = inferBrand(source);
+        String targetBrand = inferBrand(target);
+        if (!brandMatches(sourceBrand, targetBrand)) {
+            return null;
+        }
+        double brandScore = brandSimilarity(sourceBrand, targetBrand);
+
+        String sourceCoreName = extractCoreName(source);
+        String targetCoreName = extractCoreName(target);
+
+        double nameScore = jaccardSimilarity(tokenSet(safe(source.name())), tokenSet(safe(target.name())));
+        double coreNameScore = jaccardSimilarity(coreTokenSet(sourceCoreName), coreTokenSet(targetCoreName));
+        double phraseScore = Math.max(
+                leadingPhraseScore(sourceCoreName, targetCoreName),
+                phraseSimilarity(sourceCoreName, targetCoreName)
+        );
+        if (coreNameScore < 0.45d && phraseScore < 0.40d) {
+            return null;
+        }
+        Compatibility profile = compareProfiles(
+                extractMatchProfile(source),
+                extractMatchProfile(target)
+        );
+        if (!profile.compatible()) {
+            return null;
+        }
+
+        Compatibility form = compareFormConsistency(source, target);
+        Compatibility pack = comparePackCountConsistency(source, target);
+        Compatibility price = comparePriceConsistency(source, target);
+        if (!price.compatible()) {
+            return null;
+        }
+        double imageScore = imageSimilarity(
+                safe(source.imageUrl()),
+                safe(target.imageUrl()),
+                imageSignatureCache
+        );
+
+        double profileScore = (profile.score() * 0.60d) + (form.score() * 0.25d) + (pack.score() * 0.15d);
+        double score = (coreNameScore * 0.32d)
+                + (phraseScore * 0.12d)
+                + (quantity.score() * 0.20d)
+                + (brandScore * 0.08d)
+                + (profile.score() * 0.12d)
+                + (form.score() * 0.06d)
+                + (pack.score() * 0.04d)
+                + (price.score() * 0.03d)
+                + (imageScore * 0.03d);
+        score = Math.max(0d, Math.min(1d, score));
+
+        return new MarketplaceProductMatchScoreResponse(
+                score,
+                nameScore,
+                coreNameScore,
+                phraseScore,
+                quantity.score(),
+                brandScore,
+                imageScore,
+                price.score(),
+                profileScore
+        );
+    }
+
+    private double computePairMargin(
+            MarketplaceProductMatchPairResponse selectedPair,
+            List<MarketplaceProductMatchPairResponse> candidates
+    ) {
+        double selectedScore = selectedPair.score().score();
+        String ysId = normalizeExternalId(selectedPair.ys().externalId());
+        String mgId = normalizeExternalId(selectedPair.mg().externalId());
+        double nextBest = 0d;
+        for (MarketplaceProductMatchPairResponse candidate : candidates) {
+            if (candidate == selectedPair) {
+                continue;
+            }
+            String candidateYsId = normalizeExternalId(candidate.ys().externalId());
+            String candidateMgId = normalizeExternalId(candidate.mg().externalId());
+            if (!candidateYsId.equals(ysId) && !candidateMgId.equals(mgId)) {
+                continue;
+            }
+            nextBest = Math.max(nextBest, candidate.score().score());
+        }
+        return Math.max(0d, selectedScore - nextBest);
+    }
+
+    private String extractCoreName(MarketplaceProductCandidateResponse candidate) {
+        if (candidate == null) {
+            return "";
+        }
+        List<String> nameTokens = semanticTokens(safe(candidate.name()));
+        if (nameTokens.isEmpty()) {
+            return "";
+        }
+        Set<String> brandTokens = tokenSet(inferBrand(candidate));
+        List<String> filtered = new ArrayList<>();
+        for (String token : nameTokens) {
+            if (brandTokens.contains(token)) {
+                continue;
+            }
+            if (NAME_STOP_WORDS.contains(token)) {
+                continue;
+            }
+            if (token.length() <= 2) {
+                continue;
+            }
+            filtered.add(token);
+        }
+        if (filtered.isEmpty()) {
+            return String.join(" ", nameTokens);
+        }
+        return String.join(" ", filtered);
+    }
+
+    private Compatibility compareQuantity(
+            MarketplaceProductCandidateResponse leftCandidate,
+            MarketplaceProductCandidateResponse rightCandidate
+    ) {
+        QuantityInfo leftFromFields = parseQuantityInfo(leftCandidate);
+        QuantityInfo rightFromFields = parseQuantityInfo(rightCandidate);
+        boolean hasFieldInfo = leftFromFields.hasData() || rightFromFields.hasData();
+        if (hasFieldInfo) {
+            QuantityInfo leftResolved = leftFromFields.hasData()
+                    ? leftFromFields
+                    : parseQuantityInfo(safe(leftCandidate.name()));
+            QuantityInfo rightResolved = rightFromFields.hasData()
+                    ? rightFromFields
+                    : parseQuantityInfo(safe(rightCandidate.name()));
+            return compareQuantityInfo(leftResolved, rightResolved);
+        }
+        return compareQuantityInfo(parseQuantityInfo(safe(leftCandidate.name())), parseQuantityInfo(safe(rightCandidate.name())));
+    }
+
+    private Compatibility compareQuantityInfo(QuantityInfo left, QuantityInfo right) {
+        if (left.unit() == null || right.unit() == null || left.amount() == null || right.amount() == null) {
+            return new Compatibility(false, 0d);
+        }
+        if (!areUnitsCompatible(left.unit(), right.unit())) {
+            return new Compatibility(false, 0d);
+        }
+        double ratio = Math.min(left.amount(), right.amount()) / Math.max(left.amount(), right.amount());
+        if (ratio < 0.98d) {
+            return new Compatibility(false, 0d);
+        }
+        return new Compatibility(true, 1d);
+    }
+
+    private boolean areUnitsCompatible(String leftUnit, String rightUnit) {
+        if (leftUnit.equals(rightUnit)) {
+            return true;
+        }
+        // Marketplace feeds can encode liquid products as g instead of ml.
+        return (leftUnit.equals("g") && rightUnit.equals("ml"))
+                || (leftUnit.equals("ml") && rightUnit.equals("g"));
+    }
+
+    private boolean brandMatches(String leftBrand, String rightBrand) {
+        String left = normalizeBrand(leftBrand);
+        String right = normalizeBrand(rightBrand);
+        if (left.isEmpty() || right.isEmpty()) {
+            return false;
+        }
+        if (left.equals(right) || left.contains(right) || right.contains(left)) {
+            return true;
+        }
+        List<String> leftTokens = splitWords(left);
+        List<String> rightTokens = splitWords(right);
+        if (leftTokens.isEmpty() || rightTokens.isEmpty()) {
+            return false;
+        }
+        return leftTokens.getFirst().equals(rightTokens.getFirst());
+    }
+
+    private QuantityInfo parseQuantityInfo(MarketplaceProductCandidateResponse candidate) {
+        if (candidate == null) {
+            return new QuantityInfo(null, null, null);
+        }
+        QuantityInfo normalized = normalizeFieldQuantity(candidate.unitValue(), candidate.unit());
+        Integer packCount = normalizePackCount(candidate.packCount());
+        return new QuantityInfo(normalized.amount(), normalized.unit(), packCount);
+    }
+
+    private QuantityInfo parseQuantityInfo(String name) {
+        String lower = safe(name).toLowerCase(TR);
+        Matcher comboMatch = COMBO_QUANTITY_PATTERN.matcher(lower);
+        if (comboMatch.find()) {
+            Double parsedAmount = parseAmount(comboMatch.group(2), comboMatch.group(3));
+            String unit = parseUnit(comboMatch.group(3));
+            Integer packCount = Integer.parseInt(comboMatch.group(1));
+            return new QuantityInfo(parsedAmount, unit, packCount);
+        }
+
+        Double amount = null;
+        String unit = null;
+        Matcher amountMatch = AMOUNT_PATTERN.matcher(lower);
+        if (amountMatch.find()) {
+            amount = parseAmount(amountMatch.group(1), amountMatch.group(2));
+            unit = parseUnit(amountMatch.group(2));
+        }
+        Integer packCount = null;
+        Matcher packMatch = PACK_PATTERN.matcher(lower);
+        if (packMatch.find()) {
+            packCount = Integer.parseInt(packMatch.group(1));
+        }
+        return new QuantityInfo(amount, unit, packCount);
+    }
+
+    private Double parseAmount(String rawAmount, String rawUnit) {
+        double amount = parseDoubleOrNaN(rawAmount);
+        if (Double.isNaN(amount)) {
+            return null;
+        }
+        return switch (rawUnit) {
+            case "kg", "lt", "l" -> amount * 1000d;
+            case "gr", "g", "ml" -> amount;
+            default -> null;
+        };
+    }
+
+    private String parseUnit(String rawUnit) {
+        return switch (rawUnit) {
+            case "kg", "gr", "g" -> "g";
+            case "lt", "l", "ml" -> "ml";
+            default -> null;
+        };
+    }
+
+    private QuantityInfo normalizeFieldQuantity(Integer rawValue, String rawUnit) {
+        if (rawValue == null || rawValue <= 0 || rawUnit == null || rawUnit.isBlank()) {
+            return new QuantityInfo(null, null, null);
+        }
+        String lower = rawUnit.trim().toLowerCase(TR);
+        return switch (lower) {
+            case "kg" -> new QuantityInfo(rawValue.doubleValue() * 1000d, "g", null);
+            case "gr", "g" -> new QuantityInfo(rawValue.doubleValue(), "g", null);
+            case "lt", "l" -> new QuantityInfo(rawValue.doubleValue() * 1000d, "ml", null);
+            case "ml" -> new QuantityInfo(rawValue.doubleValue(), "ml", null);
+            default -> new QuantityInfo(null, null, null);
+        };
+    }
+
+    private Integer normalizePackCount(Integer packCount) {
+        if (packCount == null || packCount <= 1) {
+            return null;
+        }
+        return packCount;
+    }
+
+    private Compatibility comparePriceConsistency(
+            MarketplaceProductCandidateResponse source,
+            MarketplaceProductCandidateResponse target
+    ) {
+        Double left = resolveComparablePrice(source);
+        Double right = resolveComparablePrice(target);
+        if (left == null || right == null) {
+            return new Compatibility(true, 0.55d);
+        }
+        double ratio = Math.max(left, right) / Math.min(left, right);
+        if (ratio > 2.2d) {
+            return new Compatibility(false, 0d);
+        }
+        if (ratio <= 1.15d) {
+            return new Compatibility(true, 1d);
+        }
+        if (ratio <= 1.35d) {
+            return new Compatibility(true, 0.85d);
+        }
+        if (ratio <= 1.6d) {
+            return new Compatibility(true, 0.65d);
+        }
+        if (ratio <= 2.0d) {
+            return new Compatibility(true, 0.45d);
+        }
+        return new Compatibility(true, 0.25d);
+    }
+
+    private Double resolveComparablePrice(MarketplaceProductCandidateResponse candidate) {
+        List<Double> prices = new ArrayList<>();
+        addPositivePrice(prices, candidate.effectivePrice());
+        addPositivePrice(prices, candidate.basketDiscountPrice());
+        addPositivePrice(prices, candidate.moneyPrice());
+        addPositivePrice(prices, candidate.price());
+        return prices.isEmpty() ? null : prices.stream().min(Double::compare).orElse(null);
+    }
+
+    private void addPositivePrice(List<Double> bucket, BigDecimal value) {
+        if (value == null) {
+            return;
+        }
+        double numeric = value.doubleValue();
+        if (Double.isFinite(numeric) && numeric > 0d) {
+            bucket.add(numeric);
+        }
+    }
+
+    private Compatibility compareProfiles(MatchProfile left, MatchProfile right) {
+        if (left.goatMilk() != right.goatMilk()) {
+            return new Compatibility(false, 0d);
+        }
+        if (left.lactoseFree() != right.lactoseFree()) {
+            return new Compatibility(false, 0d);
+        }
+        if (left.organic() != right.organic()) {
+            return new Compatibility(false, 0d);
+        }
+        if (left.protein() != right.protein()) {
+            return new Compatibility(false, 0d);
+        }
+        if ((left.flavor() == null) != (right.flavor() == null)) {
+            return new Compatibility(false, 0d);
+        }
+        if (left.flavor() != null && !left.flavor().equals(right.flavor())) {
+            return new Compatibility(false, 0d);
+        }
+
+        Compatibility fat = resolveFatScore(left, right);
+        if (!fat.compatible()) {
+            return new Compatibility(false, 0d);
+        }
+
+        double processScore = 0.6d;
+        if (left.uht() && right.uht()) {
+            processScore += 0.15d;
+        }
+        if (left.pasteurized() && right.pasteurized()) {
+            processScore += 0.15d;
+        }
+        if (left.daily() && right.daily()) {
+            processScore += 0.1d;
+        }
+        if (left.bottle() && right.bottle()) {
+            processScore += 0.1d;
+        }
+        processScore = Math.min(processScore, 1d);
+        return new Compatibility(true, (fat.score() * 0.65d) + (processScore * 0.35d));
+    }
+
+    private Compatibility compareFormConsistency(
+            MarketplaceProductCandidateResponse leftCandidate,
+            MarketplaceProductCandidateResponse rightCandidate
+    ) {
+        String leftForm = detectPackageForm(safe(leftCandidate.name()));
+        String rightForm = detectPackageForm(safe(rightCandidate.name()));
+        if (leftForm.isEmpty() || rightForm.isEmpty()) {
+            return new Compatibility(true, 0.7d);
+        }
+        if (leftForm.equals(rightForm)) {
+            return new Compatibility(true, 1d);
+        }
+        return new Compatibility(true, 0.3d);
+    }
+
+    private Compatibility comparePackCountConsistency(
+            MarketplaceProductCandidateResponse leftCandidate,
+            MarketplaceProductCandidateResponse rightCandidate
+    ) {
+        QuantityInfo left = resolveQuantityInfo(leftCandidate);
+        QuantityInfo right = resolveQuantityInfo(rightCandidate);
+        if (left.packCount() == null || right.packCount() == null) {
+            return new Compatibility(true, 0.7d);
+        }
+        if (left.packCount().equals(right.packCount())) {
+            return new Compatibility(true, 1d);
+        }
+        return new Compatibility(true, 0.35d);
+    }
+
+    private QuantityInfo resolveQuantityInfo(MarketplaceProductCandidateResponse candidate) {
+        QuantityInfo fromFields = parseQuantityInfo(candidate);
+        if (fromFields.hasData()) {
+            return fromFields;
+        }
+        return parseQuantityInfo(safe(candidate.name()));
+    }
+
+    private Compatibility resolveFatScore(MatchProfile left, MatchProfile right) {
+        if (left.fatPercent() != null && right.fatPercent() != null) {
+            double diff = Math.abs(left.fatPercent() - right.fatPercent());
+            if (diff > 0.8d) {
+                return new Compatibility(false, 0d);
+            }
+            if (diff <= 0.2d) {
+                return new Compatibility(true, 1d);
+            }
+            if (diff <= 0.5d) {
+                return new Compatibility(true, 0.75d);
+            }
+            return new Compatibility(true, 0.5d);
+        }
+        if (left.fatClass() != null && right.fatClass() != null) {
+            return left.fatClass().equals(right.fatClass())
+                    ? new Compatibility(true, 1d)
+                    : new Compatibility(false, 0d);
+        }
+        return new Compatibility(true, 0.6d);
+    }
+
+    private MatchProfile extractMatchProfile(MarketplaceProductCandidateResponse candidate) {
+        String text = normalizeMatchText(safe(candidate.name()));
+        Double fatPercent = parseFatPercent(text);
+        String flavor = null;
+        if (text.contains("kakaolu")) {
+            flavor = "kakao";
+        } else if (text.contains("cilekli")) {
+            flavor = "cilek";
+        } else if (text.contains("muzlu")) {
+            flavor = "muz";
+        } else if (text.contains("latte")) {
+            flavor = "latte";
+        } else if (text.contains("kahveli")) {
+            flavor = "kahve";
+        }
+
+        String fatClass = null;
+        if (text.contains("tam yagli")) {
+            fatClass = "FULL";
+        } else if (text.contains("yarim yagli")) {
+            fatClass = "HALF";
+        } else if (text.contains("az yagli") || text.contains("0,5") || text.contains("0.5")) {
+            fatClass = "LOW";
+        }
+
+        return new MatchProfile(
+                text.contains("laktozsuz") || text.contains("rahat"),
+                text.contains("organik"),
+                text.contains("protein"),
+                text.contains("keci"),
+                flavor,
+                fatPercent,
+                fatClass,
+                text.contains("uht"),
+                text.contains("pastorize"),
+                text.contains("gunluk"),
+                text.contains("sise")
+        );
+    }
+
+    private String detectPackageForm(String rawName) {
+        String text = normalizeMatchText(rawName);
+        if (text.contains("cam sise") || text.contains("sise")) {
+            return "BOTTLE";
+        }
+        if (text.contains("pet")) {
+            return "PET";
+        }
+        if (text.contains("kutu")) {
+            return "CARTON";
+        }
+        if (text.contains("bardak")) {
+            return "CUP";
+        }
+        if (text.contains("teneke")) {
+            return "TIN";
+        }
+        if (text.contains("kavanoz")) {
+            return "JAR";
+        }
+        if (text.contains("paket")) {
+            return "PACK";
+        }
+        return "";
+    }
+
+    private Double parseFatPercent(String normalizedText) {
+        Matcher matcher = FAT_PERCENT_PATTERN.matcher(normalizedText);
+        if (!matcher.find()) {
+            return null;
+        }
+        double parsed = parseDoubleOrNaN(matcher.group(1));
+        return Double.isFinite(parsed) ? parsed : null;
+    }
+
+    private double leadingPhraseScore(String leftName, String rightName) {
+        List<String> left = semanticTokens(leftName);
+        List<String> right = semanticTokens(rightName);
+        if (left.isEmpty() || right.isEmpty()) {
+            return 0d;
+        }
+        String left1 = left.getFirst();
+        String right1 = right.getFirst();
+        String left2 = String.join(" ", left.subList(0, Math.min(2, left.size())));
+        String right2 = String.join(" ", right.subList(0, Math.min(2, right.size())));
+        if (!left2.isEmpty() && left2.equals(right2)) {
+            return 1d;
+        }
+        if (left1.equals(right1)) {
+            return 0.9d;
+        }
+        if (left1.startsWith(right1) || right1.startsWith(left1)) {
+            return 0.7d;
+        }
+        Set<String> leftHead = new LinkedHashSet<>(left.subList(0, Math.min(3, left.size())));
+        Set<String> rightHead = new LinkedHashSet<>(right.subList(0, Math.min(3, right.size())));
+        return jaccardSimilarity(leftHead, rightHead) * 0.7d;
+    }
+
+    private double phraseSimilarity(String leftName, String rightName) {
+        List<String> left = semanticTokens(leftName);
+        List<String> right = semanticTokens(rightName);
+        if (left.size() < 2 || right.size() < 2) {
+            return 0d;
+        }
+        Set<String> leftBigrams = new LinkedHashSet<>();
+        Set<String> rightBigrams = new LinkedHashSet<>();
+        for (int i = 0; i < left.size() - 1; i += 1) {
+            leftBigrams.add(left.get(i) + " " + left.get(i + 1));
+        }
+        for (int i = 0; i < right.size() - 1; i += 1) {
+            rightBigrams.add(right.get(i) + " " + right.get(i + 1));
+        }
+        return jaccardSimilarity(leftBigrams, rightBigrams);
+    }
+
+    private String inferBrand(MarketplaceProductCandidateResponse candidate) {
+        String explicit = normalizeBrand(safe(candidate.brandName()));
+        if (!explicit.isEmpty()) {
+            return explicit;
+        }
+        List<String> tokens = splitWords(normalizeMatchText(safe(candidate.name())));
+        if (tokens.isEmpty()) {
+            return "";
+        }
+        return tokens.getFirst();
+    }
+
+    private String normalizeBrand(String brand) {
+        String normalized = normalizeMatchText(safe(brand));
+        if (normalized.isEmpty() || normalized.equals("marka yok")) {
+            return "";
+        }
+        return normalized;
+    }
+
+    private double brandSimilarity(String leftBrand, String rightBrand) {
+        String left = normalizeBrand(leftBrand);
+        String right = normalizeBrand(rightBrand);
+        if (left.isEmpty() || right.isEmpty()) {
+            return 0.5d;
+        }
+        return brandSimilarityNormalized(left, right);
+    }
+
+    private double brandSimilarityNormalized(String left, String right) {
+        if (left.equals(right)) {
+            return 1d;
+        }
+        if (left.contains(right) || right.contains(left)) {
+            return 0.92d;
+        }
+        Set<String> leftTokens = splitTokenSet(left);
+        Set<String> rightTokens = splitTokenSet(right);
+        double tokenScore = jaccardSimilarity(leftTokens, rightTokens);
+        if (tokenScore >= 0.5d) {
+            return 0.85d;
+        }
+        return 0d;
+    }
+
+    private double imageSimilarity(
+            String leftUrl,
+            String rightUrl,
+            Map<String, ImageSignature> imageSignatureCache
+    ) {
+        String leftRaw = safe(leftUrl).trim();
+        String rightRaw = safe(rightUrl).trim();
+        if (leftRaw.isEmpty() || rightRaw.isEmpty()) {
+            return 0d;
+        }
+        ImageSignature leftSignature = resolveImageSignature(leftRaw, imageSignatureCache);
+        ImageSignature rightSignature = resolveImageSignature(rightRaw, imageSignatureCache);
+        if (leftSignature != null && rightSignature != null) {
+            double fullAHash = hashSimilarity(leftSignature.fullAHash(), rightSignature.fullAHash());
+            double fullDHash = hashSimilarity(leftSignature.fullDHash(), rightSignature.fullDHash());
+            double centerAHash = hashSimilarity(leftSignature.centerAHash(), rightSignature.centerAHash());
+            double centerDHash = hashSimilarity(leftSignature.centerDHash(), rightSignature.centerDHash());
+            double fullScore = (fullAHash * 0.55d) + (fullDHash * 0.45d);
+            double centerScore = (centerAHash * 0.55d) + (centerDHash * 0.45d);
+            return Math.max(fullScore, centerScore);
+        }
+
+        // Fallback path: URL fingerprint if image bytes are unreachable.
+        if (leftRaw.equals(rightRaw)) {
+            return 1d;
+        }
+        String left = imageFingerprint(leftRaw);
+        String right = imageFingerprint(rightRaw);
+        if (left.isEmpty() || right.isEmpty()) {
+            return 0d;
+        }
+        if (left.equals(right)) {
+            return 1d;
+        }
+        if (left.contains(right) || right.contains(left)) {
+            return 0.9d;
+        }
+        Set<String> leftTokens = splitTokenSet(left);
+        Set<String> rightTokens = splitTokenSet(right);
+        double tokenScore = jaccardSimilarity(leftTokens, rightTokens);
+        if (tokenScore > 0d) {
+            return Math.min(0.85d, 0.45d + tokenScore * 0.4d);
+        }
+        return left.length() >= 10 && right.length() >= 10 && left.substring(0, 10).equals(right.substring(0, 10))
+                ? 0.6d
+                : 0d;
+    }
+
+    private ImageSignature resolveImageSignature(String url, Map<String, ImageSignature> requestCache) {
+        String normalizedUrl = normalizeImageUrl(url);
+        if (normalizedUrl.isBlank()) {
+            return null;
+        }
+        if (requestCache.containsKey(normalizedUrl)) {
+            return requestCache.get(normalizedUrl);
+        }
+        CachedImageSignature processCached = PROCESS_IMAGE_CACHE.get(normalizedUrl);
+        if (processCached != null) {
+            requestCache.put(normalizedUrl, processCached.signature());
+            return processCached.signature();
+        }
+        CachedImageSignature persisted = loadPersistedSignature(normalizedUrl);
+        if (persisted != null) {
+            putProcessCache(normalizedUrl, persisted);
+            requestCache.put(normalizedUrl, persisted.signature());
+            return persisted.signature();
+        }
+        ImageSignature signature = null;
+        try {
+            URI uri = URI.create(normalizedUrl);
+            String scheme = safe(uri.getScheme()).toLowerCase(Locale.ROOT);
+            if (!"http".equals(scheme) && !"https".equals(scheme)) {
+                putUnavailableCaches(normalizedUrl, requestCache);
+                return null;
+            }
+            String host = safe(uri.getHost()).toLowerCase(Locale.ROOT);
+            if (host.endsWith(".test") || host.equals("localhost")) {
+                putUnavailableCaches(normalizedUrl, requestCache);
+                return null;
+            }
+            HttpRequest request = HttpRequest.newBuilder(uri)
+                    .GET()
+                    .timeout(IMAGE_REQUEST_TIMEOUT)
+                    .header("User-Agent", "smart-pantry-image-matcher/1.0")
+                    .build();
+            HttpResponse<byte[]> response = IMAGE_HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofByteArray());
+            if (response.statusCode() >= 200 && response.statusCode() < 300 && response.body() != null) {
+                BufferedImage image = ImageIO.read(new ByteArrayInputStream(response.body()));
+                signature = buildImageSignature(image);
+            }
+        } catch (Exception ignored) {
+        }
+        if (signature == null) {
+            putUnavailableCaches(normalizedUrl, requestCache);
+            return null;
+        }
+        CachedImageSignature cached = new CachedImageSignature(signature, false);
+        putProcessCache(normalizedUrl, cached);
+        requestCache.put(normalizedUrl, signature);
+        persistSignature(normalizedUrl, cached);
+        return signature;
+    }
+
+    private CachedImageSignature loadPersistedSignature(String normalizedUrl) {
+        if (imageSignatureCacheRepository == null) {
+            return null;
+        }
+        try {
+            return imageSignatureCacheRepository.findByNormalizedUrl(normalizedUrl)
+                    .map(this::toCachedSignature)
+                    .orElse(null);
+        } catch (RuntimeException ex) {
+            return null;
+        }
+    }
+
+    private void persistSignature(String normalizedUrl, CachedImageSignature cached) {
+        if (imageSignatureCacheRepository == null) {
+            return;
+        }
+        try {
+            ImageSignatureCache entity = imageSignatureCacheRepository.findByNormalizedUrl(normalizedUrl)
+                    .orElseGet(ImageSignatureCache::new);
+            entity.setNormalizedUrl(normalizedUrl);
+            entity.setUnavailable(cached.unavailable());
+            entity.setUpdatedAt(LocalDateTime.now());
+            if (cached.signature() == null) {
+                entity.setFullAHash(null);
+                entity.setFullDHash(null);
+                entity.setCenterAHash(null);
+                entity.setCenterDHash(null);
+            } else {
+                entity.setFullAHash(cached.signature().fullAHash());
+                entity.setFullDHash(cached.signature().fullDHash());
+                entity.setCenterAHash(cached.signature().centerAHash());
+                entity.setCenterDHash(cached.signature().centerDHash());
+            }
+            imageSignatureCacheRepository.save(entity);
+        } catch (RuntimeException ignored) {
+            // DB cache is opportunistic; matching should continue even when persistence fails.
+        }
+    }
+
+    private CachedImageSignature toCachedSignature(ImageSignatureCache entity) {
+        if (entity.isUnavailable()) {
+            return new CachedImageSignature(null, true);
+        }
+        if (entity.getFullAHash() == null ||
+                entity.getFullDHash() == null ||
+                entity.getCenterAHash() == null ||
+                entity.getCenterDHash() == null) {
+            return new CachedImageSignature(null, true);
+        }
+        return new CachedImageSignature(
+                new ImageSignature(
+                        entity.getFullAHash(),
+                        entity.getFullDHash(),
+                        entity.getCenterAHash(),
+                        entity.getCenterDHash()
+                ),
+                false
+        );
+    }
+
+    private void putUnavailableCaches(String normalizedUrl, Map<String, ImageSignature> requestCache) {
+        CachedImageSignature unavailable = new CachedImageSignature(null, true);
+        putProcessCache(normalizedUrl, unavailable);
+        requestCache.put(normalizedUrl, null);
+        persistSignature(normalizedUrl, unavailable);
+    }
+
+    private void putProcessCache(String normalizedUrl, CachedImageSignature cached) {
+        if (PROCESS_IMAGE_CACHE.size() >= PROCESS_IMAGE_CACHE_MAX_SIZE) {
+            PROCESS_IMAGE_CACHE.clear();
+        }
+        PROCESS_IMAGE_CACHE.put(normalizedUrl, cached);
+    }
+
+    private ImageSignature buildImageSignature(BufferedImage image) {
+        if (image == null || image.getWidth() <= 1 || image.getHeight() <= 1) {
+            return null;
+        }
+        BufferedImage normalized = toGrayscale(image);
+        BufferedImage centerCrop = cropCenter(normalized);
+        return new ImageSignature(
+                averageHash(normalized),
+                differenceHash(normalized),
+                averageHash(centerCrop),
+                differenceHash(centerCrop)
+        );
+    }
+
+    private BufferedImage toGrayscale(BufferedImage source) {
+        BufferedImage output = new BufferedImage(source.getWidth(), source.getHeight(), BufferedImage.TYPE_BYTE_GRAY);
+        Graphics2D g2d = output.createGraphics();
+        g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        g2d.drawImage(source, 0, 0, null);
+        g2d.dispose();
+        return output;
+    }
+
+    private BufferedImage cropCenter(BufferedImage source) {
+        double ratio = 0.75d;
+        int width = source.getWidth();
+        int height = source.getHeight();
+        int cropWidth = Math.max(2, (int) Math.round(width * ratio));
+        int cropHeight = Math.max(2, (int) Math.round(height * ratio));
+        int x = Math.max(0, (width - cropWidth) / 2);
+        int y = Math.max(0, (height - cropHeight) / 2);
+        return source.getSubimage(x, y, cropWidth, cropHeight);
+    }
+
+    private long averageHash(BufferedImage source) {
+        int width = 8;
+        int height = 8;
+        BufferedImage scaled = resize(source, width, height);
+        int[] values = new int[width * height];
+        long sum = 0L;
+        int index = 0;
+        for (int y = 0; y < height; y += 1) {
+            for (int x = 0; x < width; x += 1) {
+                int value = scaled.getRaster().getSample(x, y, 0);
+                values[index] = value;
+                sum += value;
+                index += 1;
+            }
+        }
+        double avg = (double) sum / (double) values.length;
+        long hash = 0L;
+        for (int i = 0; i < values.length; i += 1) {
+            if (values[i] >= avg) {
+                hash |= (1L << i);
+            }
+        }
+        return hash;
+    }
+
+    private long differenceHash(BufferedImage source) {
+        int width = 9;
+        int height = 8;
+        BufferedImage scaled = resize(source, width, height);
+        long hash = 0L;
+        int bitIndex = 0;
+        for (int y = 0; y < height; y += 1) {
+            for (int x = 0; x < width - 1; x += 1) {
+                int left = scaled.getRaster().getSample(x, y, 0);
+                int right = scaled.getRaster().getSample(x + 1, y, 0);
+                if (left >= right) {
+                    hash |= (1L << bitIndex);
+                }
+                bitIndex += 1;
+            }
+        }
+        return hash;
+    }
+
+    private BufferedImage resize(BufferedImage source, int width, int height) {
+        BufferedImage resized = new BufferedImage(width, height, BufferedImage.TYPE_BYTE_GRAY);
+        Graphics2D g2d = resized.createGraphics();
+        g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        g2d.drawImage(source, 0, 0, width, height, null);
+        g2d.dispose();
+        return resized;
+    }
+
+    private double hashSimilarity(long left, long right) {
+        long diff = left ^ right;
+        int distance = Long.bitCount(diff);
+        return 1d - ((double) distance / 64d);
+    }
+
+    private Set<String> splitTokenSet(String value) {
+        String[] split = value.split("[^a-z0-9]+");
+        Set<String> result = new LinkedHashSet<>();
+        for (String token : split) {
+            if (token.length() > 2) {
+                result.add(token);
+            }
+        }
+        return result;
+    }
+
+    private String imageFingerprint(String url) {
+        if (url.isEmpty()) {
+            return "";
+        }
+        String withoutQuery = url.split("\\?")[0];
+        String[] parts = withoutQuery.split("/");
+        String fileName = parts.length == 0 ? "" : parts[parts.length - 1];
+        return fileName.replaceAll("\\.[a-z0-9]+$", "").toLowerCase(TR);
+    }
+
+    private Set<String> tokenSet(String value) {
+        Set<String> tokens = new LinkedHashSet<>();
+        for (String token : semanticTokens(value)) {
+            if (token.length() > 1) {
+                tokens.add(token);
+            }
+        }
+        return tokens;
+    }
+
+    private Set<String> coreTokenSet(String value) {
+        Set<String> source = tokenSet(value);
+        Set<String> filtered = new LinkedHashSet<>();
+        for (String token : source) {
+            if (!NAME_STOP_WORDS.contains(token) && token.length() > 2) {
+                filtered.add(token);
+            }
+        }
+        return filtered;
+    }
+
+    private double jaccardSimilarity(Set<String> left, Set<String> right) {
+        if (left.isEmpty() || right.isEmpty()) {
+            return 0d;
+        }
+        int intersection = 0;
+        for (String token : left) {
+            if (right.contains(token)) {
+                intersection += 1;
+            }
+        }
+        int union = left.size() + right.size() - intersection;
+        return union == 0 ? 0d : (double) intersection / (double) union;
+    }
+
+    private String normalizeMatchText(String value) {
+        return normalizePlainText(value).replaceAll("\\s+", " ").trim();
+    }
+
+    private String normalizePlainText(String value) {
+        String lower = safe(value).toLowerCase(TR);
+        String normalized = Normalizer.normalize(lower, Normalizer.Form.NFD);
+        return normalized.replaceAll("\\p{M}+", "");
+    }
+
+    private List<String> splitWords(String value) {
+        if (value == null || value.isBlank()) {
+            return List.of();
+        }
+        return List.of(value.split("\\s+"));
+    }
+
+    private List<String> semanticTokens(String value) {
+        String normalized = normalizePlainText(value)
+                .replaceAll("\\d+\\s*[xX]\\s*\\d+([.,]\\d+)?\\s*(g|gr|kg|ml|l|lt)\\b", " ")
+                .replaceAll("\\d+([.,]\\d+)?\\s*(g|gr|kg|ml|l|lt)\\b", " ")
+                .replaceAll("\\d+\\s*(li|lu|pack|paket|adet)\\b", " ")
+                .replaceAll("[^a-z0-9\\s]", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+        if (normalized.isEmpty()) {
+            return List.of();
+        }
+        List<String> result = new ArrayList<>();
+        for (String rawToken : tokenizeWithNlp(normalized)) {
+            String token = normalizeMatchText(rawToken);
+            if (token.isBlank()) {
+                continue;
+            }
+            token = NLP_LEMMA_MAP.getOrDefault(token, token);
+            token = stemToken(token);
+            if (NLP_NOISE_TOKENS.contains(token)) {
+                continue;
+            }
+            if (token.length() <= 1) {
+                continue;
+            }
+            result.add(token);
+        }
+        return result;
+    }
+
+    private List<String> tokenizeWithNlp(String value) {
+        if (value == null || value.isBlank()) {
+            return List.of();
+        }
+        return splitWords(normalizeMatchText(value));
+    }
+
+    private String stemToken(String token) {
+        if (token.isBlank() || token.length() <= 4) {
+            return token;
+        }
+        String cached = NLP_TOKEN_CACHE.get(token);
+        if (cached != null) {
+            return cached;
+        }
+        String resolved = token;
+        try {
+            TurkishStemmer stemmer = new TurkishStemmer();
+            stemmer.setCurrent(token);
+            if (stemmer.stem()) {
+                String stemmed = normalizeMatchText(stemmer.getCurrent());
+                if (!stemmed.isBlank()) {
+                    resolved = NLP_LEMMA_MAP.getOrDefault(stemmed, stemmed);
+                }
+            }
+        } catch (RuntimeException ignored) {
+            resolved = token;
+        }
+
+        if (NLP_TOKEN_CACHE.size() > NLP_TOKEN_CACHE_MAX_SIZE) {
+            NLP_TOKEN_CACHE.clear();
+        }
+        NLP_TOKEN_CACHE.put(token, resolved);
+        return resolved;
+    }
+
+    private String normalizeExternalId(String value) {
+        return safe(value).trim().toLowerCase(Locale.ROOT);
+    }
+
+    private String normalizeImageUrl(String value) {
+        return safe(value).trim();
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value;
+    }
+
+    private double parseDoubleOrNaN(String value) {
+        try {
+            return Double.parseDouble(value.replace(",", "."));
+        } catch (RuntimeException ex) {
+            return Double.NaN;
+        }
+    }
+
+    private record QuantityInfo(
+            Double amount,
+            String unit,
+            Integer packCount
+    ) {
+        boolean hasData() {
+            return amount != null || unit != null || packCount != null;
+        }
+    }
+
+    private record Compatibility(
+            boolean compatible,
+            double score
+    ) {
+    }
+
+    private record ImageSignature(
+            long fullAHash,
+            long fullDHash,
+            long centerAHash,
+            long centerDHash
+    ) {
+    }
+
+    private record CachedImageSignature(
+            ImageSignature signature,
+            boolean unavailable
+    ) {
+    }
+
+    private record MatchProfile(
+            boolean lactoseFree,
+            boolean organic,
+            boolean protein,
+            boolean goatMilk,
+            String flavor,
+            Double fatPercent,
+            String fatClass,
+            boolean uht,
+            boolean pasteurized,
+            boolean daily,
+            boolean bottle
+    ) {
+    }
+}

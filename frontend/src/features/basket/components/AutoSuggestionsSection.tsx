@@ -45,7 +45,7 @@ export default function AutoSuggestionsSection<TItem extends AutoSuggestionItem>
             >
               <div className="relative h-9 w-9 overflow-hidden rounded-md border border-black/10 bg-[#f3f4f6]">
                 {item.imageUrl ? (
-                  <Image src={item.imageUrl} alt={item.name} fill sizes="36px" className="object-cover" />
+                  <Image src={item.imageUrl} alt={item.name} fill sizes="36px" className="object-cover" unoptimized />
                 ) : null}
               </div>
               <div className="min-w-0 flex-1">

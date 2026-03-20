@@ -172,6 +172,9 @@ class MarketplaceProductServiceTest {
                         null,
                         null,
                         null,
+                        null,
+                        null,
+                        null,
                         null
                 )));
 
@@ -203,6 +206,9 @@ class MarketplaceProductServiceTest {
                         "Brand",
                         "https://example/image.png",
                         new BigDecimal("10.00"),
+                        null,
+                        null,
+                        null,
                         null,
                         null,
                         null,

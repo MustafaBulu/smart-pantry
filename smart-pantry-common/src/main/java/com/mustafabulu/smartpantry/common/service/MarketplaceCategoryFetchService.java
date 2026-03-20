@@ -22,7 +22,10 @@ public interface MarketplaceCategoryFetchService {
             java.math.BigDecimal basketDiscountPrice,
             Integer campaignBuyQuantity,
             Integer campaignPayQuantity,
-            java.math.BigDecimal effectivePrice
+            java.math.BigDecimal effectivePrice,
+            String unit,
+            Integer unitValue,
+            Integer packCount
     ) {
     }
 }

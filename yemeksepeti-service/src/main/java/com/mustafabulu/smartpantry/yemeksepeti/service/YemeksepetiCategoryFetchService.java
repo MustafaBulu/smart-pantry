@@ -23,6 +23,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Locale;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -42,6 +43,7 @@ public class YemeksepetiCategoryFetchService implements MarketplaceCategoryFetch
     private static final String LOCALE = "tr_TR";
     private static final String VENDOR_ID = "j3a6";
     private static final int LIMIT = 12;
+    private static final int MAX_PAGES = 40;
     private static final String HEADER_SEG_CLIENT = "client";
     private static final String HEADER_APOLLOGRAPHQL_CLIENT_NAME = buildHeaderName("apollographql", HEADER_SEG_CLIENT, "name");
     private static final String HEADER_APOLLOGRAPHQL_CLIENT_VERSION = buildHeaderName("apollographql", HEADER_SEG_CLIENT, "version");
@@ -49,8 +51,20 @@ public class YemeksepetiCategoryFetchService implements MarketplaceCategoryFetch
     private static final String HEADER_PERSEUS_CLIENT_ID = buildHeaderName("perseus", HEADER_SEG_CLIENT, "id");
     private static final String HEADER_PERSEUS_SESSION_ID = buildHeaderName("perseus", "session", "id");
     private static final String HEADER_CUST_CODE = buildHeaderName("cust", "code");
+    private static final Set<String> BRAND_ATTRIBUTE_KEYS = Set.of("brand", "brandName", "manufacturer", "producer");
+    private static final Set<String> LEADING_SKIP_TOKENS = Set.of(
+            "yeni", "indirim", "kampanya", "paket", "paketi", "bundle", "adet", "li", "lu", "x", "ve",
+            "super", "mega", "ultra", "dev", "buyuk", "maxi", "mini"
+    );
+    private static final Set<String> LOCATION_PREFIX_TOKENS = Set.of("silivri", "susurluk", "gonen");
+    private static final Set<String> KNOWN_MULTIWORD_BRANDS = Set.of(
+            "la lorraine",
+            "coca cola",
+            "nuhun ankara",
+            "kinder bueno"
+    );
     private static final Pattern EXPLICIT_MULTIPLIER_PATTERN = Pattern.compile(
-            "(\\d+)\\s*x|x\\s*(\\d+)|(\\d+)\\s*(li|lu|lü)\\b",
+            "(\\d+)\\s*x|x\\s*(\\d+)|(\\d+)\\s*(li|lu)\\b",
             Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE | Pattern.CANON_EQ
     );
     private static final String SEARCH_QUERY = """
@@ -59,6 +73,17 @@ public class YemeksepetiCategoryFetchService implements MarketplaceCategoryFetch
                 price
                 productID
                 urls
+                attributes {
+                    key
+                    value
+                }
+                activeCampaigns {
+                    type
+                    discountType
+                    discountValue
+                    triggerQuantity
+                    benefitQuantity
+                }
             }
             
             query getSearchProducts(
@@ -111,13 +136,20 @@ public class YemeksepetiCategoryFetchService implements MarketplaceCategoryFetch
             return List.of();
         }
         String trimmed = categoryName.trim();
-
-        String responseBody = fetchSearchResponse(trimmed);
-        if (responseBody == null || responseBody.isBlank()) {
-            return List.of();
-        }
-        try {
-            JsonNode root = objectMapper.readTree(responseBody);
+        Map<String, MarketplaceProductCandidate> candidates = new LinkedHashMap<>();
+        int offset = 0;
+        for (int page = 0; page < MAX_PAGES; page += 1) {
+            String responseBody = fetchSearchResponse(trimmed, offset);
+            if (responseBody == null || responseBody.isBlank()) {
+                break;
+            }
+            JsonNode root;
+            try {
+                root = objectMapper.readTree(responseBody);
+            } catch (IOException ex) {
+                log.warn("Yemeksepeti search response parse failed.", ex);
+                break;
+            }
             JsonNode searchProducts = root.path("data").path("searchProducts");
             if (searchProducts.isMissingNode() || searchProducts.isNull()) {
                 JsonNode errors = root.path("errors");
@@ -126,30 +158,35 @@ public class YemeksepetiCategoryFetchService implements MarketplaceCategoryFetch
                 } else {
                     log.warn("Yemeksepeti search returned null data. bodySize={}", responseBody.length());
                 }
-                return List.of();
+                break;
             }
-            Map<String, MarketplaceProductCandidate> candidates = new LinkedHashMap<>();
-            collectCandidates(candidates, searchProducts.path("products").path("items"));
-            List<MarketplaceProductCandidate> result = new ArrayList<>(candidates.values());
-            long durationMs = (System.nanoTime() - startedAt) / 1_000_000;
-            log.info(
-                    "yemeksepeti candidate fetch timing: categoryName={}, count={}, durationMs={}",
-                    categoryName,
-                    result.size(),
-                    durationMs
-            );
-            return result;
-        } catch (IOException ex) {
-            log.warn("Yemeksepeti search response parse failed.", ex);
-            return List.of();
+
+            JsonNode items = searchProducts.path("products").path("items");
+            int beforeCount = candidates.size();
+            collectCandidates(candidates, items);
+            int pageItemCount = items.isArray() ? items.size() : 0;
+            int addedCount = candidates.size() - beforeCount;
+            if (pageItemCount < LIMIT || addedCount <= 0) {
+                break;
+            }
+            offset += LIMIT;
         }
+        List<MarketplaceProductCandidate> result = new ArrayList<>(candidates.values());
+        long durationMs = (System.nanoTime() - startedAt) / 1_000_000;
+        log.info(
+                "yemeksepeti candidate fetch timing: categoryName={}, count={}, durationMs={}",
+                categoryName,
+                result.size(),
+                durationMs
+        );
+        return result;
     }
 
     @SuppressWarnings("HttpHeaderName")
-    private String fetchSearchResponse(String query) {
+    private String fetchSearchResponse(String query, int offset) {
         String requestBody;
         try {
-            requestBody = objectMapper.writeValueAsString(buildPayload(query));
+            requestBody = objectMapper.writeValueAsString(buildPayload(query, offset));
         } catch (IOException ex) {
             log.warn("Yemeksepeti search payload build failed.", ex);
             return null;
@@ -180,7 +217,7 @@ public class YemeksepetiCategoryFetchService implements MarketplaceCategoryFetch
         }
     }
 
-    private ObjectNode buildPayload(String query) {
+    private ObjectNode buildPayload(String query, int offset) {
         ObjectNode payload = objectMapper.createObjectNode();
         payload.put("query", SEARCH_QUERY);
 
@@ -189,7 +226,7 @@ public class YemeksepetiCategoryFetchService implements MarketplaceCategoryFetch
         variables.put("languageCode", LANGUAGE_CODE);
         variables.put("limit", LIMIT);
         variables.put("locale", LOCALE);
-        variables.put("offset", 0);
+        variables.put("offset", Math.max(0, offset));
         variables.put("query", query);
 
         ArrayNode vendors = variables.putArray("vendors");
@@ -224,20 +261,27 @@ public class YemeksepetiCategoryFetchService implements MarketplaceCategoryFetch
         if (items == null || !items.isArray()) {
             return;
         }
+        int loggedPayloadCount = 0;
         for (JsonNode item : items) {
             JsonNode payload = item.path("payload");
+            if (loggedPayloadCount < 5) {
+                log.info("YS search raw payload[{}]: {}", loggedPayloadCount, payload);
+                loggedPayloadCount += 1;
+            }
             String externalId = payload.path("productID").asText("");
             if (externalId.isBlank()) {
                 continue;
             }
             String name = payload.path("name").asText("");
+            ProductAttributeInfo attributeInfo = parseAttributeInfo(payload.path("attributes"));
+            String brandName = resolveBrandName(name, attributeInfo.brandName());
             BigDecimal price = adjustBundlePrice(name, resolvePrice(payload.path("price")));
             String imageUrl = resolveImageUrl(payload.path("urls"));
             MarketplaceProductCandidate candidate = new MarketplaceProductCandidate(
                     Marketplace.YS,
                     externalId,
                     name,
-                    "",
+                    brandName,
                     imageUrl,
                     price,
                     null,
@@ -245,7 +289,10 @@ public class YemeksepetiCategoryFetchService implements MarketplaceCategoryFetch
                     null,
                     null,
                     null,
-                    null
+                    null,
+                    attributeInfo.unit(),
+                    attributeInfo.unitValue(),
+                    attributeInfo.packCount()
             );
             candidates.putIfAbsent(externalId, candidate);
         }
@@ -304,5 +351,222 @@ public class YemeksepetiCategoryFetchService implements MarketplaceCategoryFetch
         // YS "Bundle" products are usually sold as 2-pack.
         return 2;
     }
+
+    private ProductAttributeInfo parseAttributeInfo(JsonNode attributesNode) {
+        if (attributesNode == null || !attributesNode.isArray()) {
+            return new ProductAttributeInfo(null, null, null, null);
+        }
+        AttributeState state = new AttributeState();
+        for (JsonNode attr : attributesNode) {
+            applyAttributeValue(attr, state);
+        }
+        NormalizedAmount normalized = normalizeAmount(state.contentsValue, state.contentsUnit);
+        if (normalized == null) {
+            normalized = normalizeAmount(state.weightValue, state.weightUnit);
+        }
+        if (normalized != null && state.packCount != null && state.packCount > 1) {
+            normalized = new NormalizedAmount(
+                    normalized.unit(),
+                    Math.toIntExact(Math.round((double) normalized.value() * state.packCount))
+            );
+        }
+        return new ProductAttributeInfo(
+                normalized == null ? null : normalized.unit(),
+                normalized == null ? null : normalized.value(),
+                state.packCount,
+                state.brandName
+        );
+    }
+
+    private void applyAttributeValue(JsonNode attr, AttributeState state) {
+        String key = attr.path("key").asText("").trim();
+        String value = attr.path("value").asText("").trim();
+        if (key.isBlank() || value.isBlank()) {
+            return;
+        }
+        switch (key) {
+            case "contentsValue" -> state.contentsValue = parseDouble(value);
+            case "contentsUnit" -> state.contentsUnit = value;
+            case "weightValue" -> state.weightValue = parseDouble(value);
+            case "weightUnit" -> state.weightUnit = value;
+            case "numberOfUnits" -> state.packCount = normalizePackCount(parseInteger(value));
+            default -> assignBrandIfEmpty(key, value, state);
+        }
+    }
+
+    private void assignBrandIfEmpty(String key, String value, AttributeState state) {
+        if (BRAND_ATTRIBUTE_KEYS.contains(key) && (state.brandName == null || state.brandName.isBlank())) {
+            state.brandName = value;
+        }
+    }
+
+    private Integer normalizePackCount(Integer value) {
+        if (value == null || value <= 1) {
+            return null;
+        }
+        return value;
+    }
+
+    private String resolveBrandName(String productName, String attributeBrand) {
+        String fromAttribute = safeTrim(attributeBrand);
+        if (!fromAttribute.isBlank()) {
+            return canonicalizeBrandName(fromAttribute);
+        }
+        return canonicalizeBrandName(inferBrandFromName(productName));
+    }
+
+    private String inferBrandFromName(String productName) {
+        if (productName == null || productName.isBlank()) {
+            return "";
+        }
+        List<String> cleanedTokens = new ArrayList<>();
+        for (String token : productName.trim().split("\\s+")) {
+            String cleaned = cleanToken(token);
+            if (!cleaned.isBlank()) {
+                cleanedTokens.add(cleaned);
+            }
+        }
+        if (cleanedTokens.isEmpty()) {
+            return "";
+        }
+
+        int start = 0;
+        while (start < cleanedTokens.size()) {
+            String normalized = normalizeTokenForChecks(cleanedTokens.get(start));
+            if (!isBundleOrCountToken(normalized) &&
+                    !LEADING_SKIP_TOKENS.contains(normalized) &&
+                    !LOCATION_PREFIX_TOKENS.contains(normalized)) {
+                break;
+            }
+            start += 1;
+        }
+        if (start >= cleanedTokens.size()) {
+            return "";
+        }
+
+        int maxPhraseLength = Math.min(3, cleanedTokens.size() - start);
+        for (int len = maxPhraseLength; len >= 2; len -= 1) {
+            String phraseKey = toBrandDictionaryKey(cleanedTokens, start, len);
+            if (KNOWN_MULTIWORD_BRANDS.contains(phraseKey)) {
+                return String.join(" ", cleanedTokens.subList(start, start + len));
+            }
+        }
+
+        return cleanedTokens.get(start);
+    }
+
+    private String canonicalizeBrandName(String rawBrand) {
+        String trimmed = safeTrim(rawBrand);
+        if (trimmed.isBlank()) {
+            return "";
+        }
+        String normalized = normalizeTokenForChecks(trimmed).replace("-", " ").replaceAll("\\s+", " ").trim();
+        return switch (normalized) {
+            case "coca", "coca cola", "coca kola" -> "Coca-Cola";
+            default -> trimmed;
+        };
+    }
+
+    private boolean isBundleOrCountToken(String token) {
+        if (token == null || token.isBlank()) {
+            return false;
+        }
+        return token.matches("\\d+") ||
+                token.matches("\\d+x") ||
+                token.matches("x\\d+") ||
+                token.matches("\\d+li") ||
+                token.matches("\\d+lu");
+    }
+
+    private String cleanToken(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        return raw
+                .replaceAll("^[^\\p{L}\\p{N}]+", "")
+                .replaceAll("[^\\p{L}\\p{N}]+$", "");
+    }
+
+    private String safeTrim(String value) {
+        return value == null ? "" : value.trim();
+    }
+
+    private String normalizeTokenForChecks(String token) {
+        if (token == null) {
+            return "";
+        }
+        return token
+                .trim()
+                .toLowerCase(Locale.ROOT)
+                .replace("'", "")
+                .replace("’", "")
+                .replace("ç", "c")
+                .replace("ğ", "g")
+                .replace("ı", "i")
+                .replace("ö", "o")
+                .replace("ş", "s")
+                .replace("ü", "u");
+    }
+
+    private String toBrandDictionaryKey(List<String> tokens, int start, int length) {
+        List<String> normalized = new ArrayList<>();
+        for (int i = start; i < start + length && i < tokens.size(); i += 1) {
+            normalized.add(normalizeTokenForChecks(tokens.get(i)));
+        }
+        return String.join(" ", normalized);
+    }
+
+    private NormalizedAmount normalizeAmount(Double rawValue, String rawUnit) {
+        if (rawValue == null || rawValue <= 0d || rawUnit == null || rawUnit.isBlank()) {
+            return null;
+        }
+        String unit = rawUnit.trim().toLowerCase(Locale.ROOT);
+        return switch (unit) {
+            case "kg" -> new NormalizedAmount("g", (int) Math.round(rawValue * 1000d));
+            case "g", "gr" -> new NormalizedAmount("g", (int) Math.round(rawValue));
+            case "l", "lt" -> new NormalizedAmount("ml", (int) Math.round(rawValue * 1000d));
+            case "ml" -> new NormalizedAmount("ml", (int) Math.round(rawValue));
+            default -> null;
+        };
+    }
+
+    private Double parseDouble(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return Double.parseDouble(raw.replace(",", "."));
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private Integer parseInteger(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(raw.trim());
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private record ProductAttributeInfo(String unit, Integer unitValue, Integer packCount, String brandName) {
+    }
+
+    private static final class AttributeState {
+        private Double contentsValue;
+        private String contentsUnit;
+        private Double weightValue;
+        private String weightUnit;
+        private Integer packCount;
+        private String brandName;
+    }
+
+    private record NormalizedAmount(String unit, Integer value) {
+    }
 }
+
+
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { ReactNode } from "react";
 import ProductInsightsPanel from "@/components/ProductInsightsPanel";
 import Image from "next/image";
@@ -39,6 +40,9 @@ type ProductInfoModalProps = Readonly<{
   onAddActiveCategoryToNeedListAction: () => void;
   historyCountLabel: string;
   historyContent: ReactNode;
+  manualMatchOptions?: Array<{ externalId: string; label: string }>;
+  onCreateManualMatchAction?: (targetExternalId: string) => void;
+  manualMatchBusy?: boolean;
 }>;
 
 export default function ProductInfoModal({
@@ -67,7 +71,12 @@ export default function ProductInfoModal({
   onAddActiveCategoryToNeedListAction,
   historyCountLabel,
   historyContent,
+  manualMatchOptions = [],
+  onCreateManualMatchAction,
+  manualMatchBusy = false,
 }: ProductInfoModalProps) {
+  const [manualMatchSelection, setManualMatchSelection] = useState("");
+
   if (!isOpen || !product) {
     return null;
   }
@@ -75,6 +84,11 @@ export default function ProductInfoModal({
   const selectedNeedActionLabel = selectedInNeedList
     ? "Ihtiyac Listesinde Guncelle"
     : "Ihtiyac Listesine Ekle";
+  const selectedManualMatchExternalId = manualMatchOptions.some(
+    (option) => option.externalId === manualMatchSelection
+  )
+    ? manualMatchSelection
+    : (manualMatchOptions[0]?.externalId ?? "");
 
   const selectedMarketplaceBadge =
     product.marketplaceCode === "YS" ? (
@@ -116,7 +130,7 @@ export default function ProductInfoModal({
           <div className="flex items-center gap-3">
             <div className="relative h-14 w-14 overflow-hidden rounded-2xl border border-black/10 bg-white">
               {product.imageUrl ? (
-                <Image src={product.imageUrl} alt={product.name} fill sizes="56px" className="object-cover" />
+                <Image src={product.imageUrl} alt={product.name} fill sizes="56px" className="object-cover" unoptimized />
               ) : (
                 <div className="flex h-full w-full items-center justify-center text-xs text-[#6b655c]">
                   Gorsel yok
@@ -187,6 +201,40 @@ export default function ProductInfoModal({
               historyCountLabel={historyCountLabel}
               historyContent={historyContent}
             />
+            {onCreateManualMatchAction && manualMatchOptions.length > 0 && (
+              <div className="rounded-xl border border-black/5 bg-white px-3 py-2">
+                <p className="text-[11px] uppercase tracking-[0.18em] text-[#9a5c00]">
+                  Manuel Eslestirme
+                </p>
+                <div className="mt-2 flex items-center gap-2">
+                  <select
+                    className="h-9 w-full rounded-lg border border-black/10 bg-white px-2 text-xs text-[#111] outline-none ring-[#d97706] focus:ring-2"
+                    value={selectedManualMatchExternalId}
+                    onChange={(event) => setManualMatchSelection(event.target.value)}
+                    disabled={manualMatchBusy}
+                  >
+                    {manualMatchOptions.map((option) => (
+                      <option key={option.externalId} value={option.externalId}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="h-9 shrink-0 rounded-lg border border-black/10 bg-[#f9f4ee] px-3 text-xs font-semibold text-[#9a5c00] transition hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    onClick={() => {
+                      if (!selectedManualMatchExternalId) {
+                        return;
+                      }
+                      onCreateManualMatchAction(selectedManualMatchExternalId);
+                    }}
+                    disabled={manualMatchBusy || !selectedManualMatchExternalId}
+                  >
+                    Eslestir
+                  </button>
+                </div>
+              </div>
+            )}
             {showNeedActions && (
               <div className="rounded-xl border border-black/5 bg-white px-3 py-2">
                 <p className="text-[11px] uppercase tracking-[0.18em] text-[#9a5c00]">

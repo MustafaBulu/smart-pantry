@@ -7,6 +7,11 @@ import jakarta.validation.constraints.NotBlank;
 public record CategoryRequest(
         @Schema(description = "Category name", example = "Snacks")
         @NotBlank
-        String name
+        String name,
+        @Schema(description = "Optional main category/group name", example = "Temel Gida")
+        String mainCategory
 ) {
+    public CategoryRequest(String name) {
+        this(name, null);
+    }
 }

@@ -13,18 +13,27 @@ const nextConfig: NextConfig = {
     "0.0.0.0",
   ],
   images: {
+    unoptimized: true,
+    domains: [
+      "yemeksepeti.dhmedia.io",
+      "images.migrosone.com",
+      "images.deliveryhero.io",
+    ],
     remotePatterns: [
       {
         protocol: "https",
         hostname: "yemeksepeti.dhmedia.io",
+        pathname: "/**",
       },
       {
         protocol: "https",
         hostname: "images.migrosone.com",
+        pathname: "/**",
       },
       {
         protocol: "https",
         hostname: "images.deliveryhero.io",
+        pathname: "/**",
       },
     ],
   },

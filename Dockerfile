@@ -6,6 +6,7 @@ COPY mvnw pom.xml ./
 COPY smart-pantry-common/pom.xml smart-pantry-common/pom.xml
 COPY migros-service/pom.xml migros-service/pom.xml
 COPY yemeksepeti-service/pom.xml yemeksepeti-service/pom.xml
+COPY discovery-server/pom.xml discovery-server/pom.xml
 
 RUN chmod +x mvnw && ./mvnw -q -DskipTests -pl migros-service,yemeksepeti-service -am dependency:go-offline
 

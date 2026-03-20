@@ -3,10 +3,13 @@ package com.mustafabulu.smartpantry.common.controller.impl;
 import com.mustafabulu.smartpantry.common.controller.CategoryController;
 import com.mustafabulu.smartpantry.common.core.response.ResponseMessages;
 import com.mustafabulu.smartpantry.common.dto.request.CategoryRequest;
+import com.mustafabulu.smartpantry.common.dto.request.MarketplaceManualMatchRequest;
+import com.mustafabulu.smartpantry.common.dto.request.MarketplaceProductMatchRequest;
 import com.mustafabulu.smartpantry.common.dto.response.CategoryResponse;
 import com.mustafabulu.smartpantry.common.dto.response.MarketplaceProductAddedResponse;
 import com.mustafabulu.smartpantry.common.dto.response.MarketplaceProductCandidateResponse;
 import com.mustafabulu.smartpantry.common.dto.response.MarketplaceProductEntryResponse;
+import com.mustafabulu.smartpantry.common.dto.response.MarketplaceProductMatchPairResponse;
 import com.mustafabulu.smartpantry.common.service.CategoryService;
 import com.mustafabulu.smartpantry.common.service.MarketplaceRequestResolver;
 import jakarta.validation.Valid;
@@ -35,7 +38,7 @@ public class CategoryControllerImpl implements CategoryController {
     @PostMapping
     @Override
     public ResponseEntity<CategoryResponse> createCategory(@Valid @RequestBody CategoryRequest request) {
-        return ResponseEntity.ok(categoryService.createCategory(request.name()));
+        return ResponseEntity.ok(categoryService.createCategory(request.name(), request.mainCategory()));
     }
 
     @GetMapping
@@ -50,7 +53,7 @@ public class CategoryControllerImpl implements CategoryController {
             @PathVariable Long id,
             @Valid @RequestBody CategoryRequest request
     ) {
-        return ResponseEntity.ok(categoryService.updateCategory(id, request.name()));
+        return ResponseEntity.ok(categoryService.updateCategory(id, request.name(), request.mainCategory()));
     }
 
     @DeleteMapping("/{id}")
@@ -63,6 +66,39 @@ public class CategoryControllerImpl implements CategoryController {
     @GetMapping("/{id}/marketplace-products")
     public ResponseEntity<List<MarketplaceProductCandidateResponse>> listMarketplaceCandidates(@PathVariable Long id) {
         return ResponseEntity.ok(categoryService.listMarketplaceCandidates(id));
+    }
+
+    @PostMapping("/marketplace-products/match")
+    public ResponseEntity<List<MarketplaceProductMatchPairResponse>> matchMarketplaceProducts(
+            @RequestBody MarketplaceProductMatchRequest request
+    ) {
+        return ResponseEntity.ok(
+                categoryService.matchMarketplaceProducts(
+                        request.categoryId(),
+                        request.ys(),
+                        request.mg(),
+                        request.minScore()
+                )
+        );
+    }
+
+    @PostMapping("/{id}/marketplace-products/manual-match")
+    public ResponseEntity<Void> saveManualMarketplaceMatch(
+            @PathVariable Long id,
+            @RequestBody MarketplaceManualMatchRequest request
+    ) {
+        categoryService.saveManualMarketplaceMatch(id, request.ysExternalId(), request.mgExternalId());
+        return ResponseEntity.ok().build();
+    }
+
+    @DeleteMapping("/{id}/marketplace-products/manual-match")
+    public ResponseEntity<Void> deleteManualMarketplaceMatch(
+            @PathVariable Long id,
+            @RequestParam String ysExternalId,
+            @RequestParam String mgExternalId
+    ) {
+        categoryService.deleteManualMarketplaceMatch(id, ysExternalId, mgExternalId);
+        return ResponseEntity.ok().build();
     }
 
     @GetMapping("/{id}/marketplace-products/added")
