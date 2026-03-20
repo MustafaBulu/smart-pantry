@@ -49,125 +49,197 @@ public class MigrosCatalogCategoryRangeImportService implements MarketplaceCatal
             int endCategoryId
     ) {
         if (sourceUrl == null || sourceUrl.isBlank()) {
-            return new CatalogCategoryRangeImportResult(Marketplace.MG.getCode(), 0, 0, 0, 0, 0, 0);
+            return emptyImportResult();
         }
-        Map<String, RawCatalogProduct> byExternalId = new LinkedHashMap<>();
-        int totalPageCount = 0;
-        int totalCollectedProductCount = 0;
-
-        for (int categoryId = startCategoryId; categoryId <= endCategoryId; categoryId += 1) {
-            int page = 1;
-            int pageCount = 1;
-            while (page <= pageCount && page <= MAX_PAGE_LIMIT) {
-                String pagedUrl = withQueryParams(sourceUrl, categoryId, page);
-                if (pagedUrl.isBlank()) {
-                    break;
-                }
-                Request request = new Request.Builder()
-                        .url(pagedUrl)
-                        .get()
-                        .addHeader("Accept", "application/json")
-                        .addHeader("Accept-Language", "tr")
-                        .addHeader("Referer", "https://www.migros.com.tr/")
-                        .addHeader("X-FORWARDED-REST", "true")
-                        .addHeader("X-PWA", "true")
-                        .addHeader("X-Device-PWA", "true")
-                        .build();
-                try (Response response = httpClient.newCall(request).execute()) {
-                    if (!response.isSuccessful() || response.body() == null) {
-                        break;
-                    }
-                    JsonNode root = objectMapper.readTree(response.body().string());
-                    JsonNode data = root.path("data");
-                    if (data.isMissingNode() || data.isNull()) {
-                        break;
-                    }
-                    pageCount = Math.max(pageCount, data.path("pageCount").asInt(pageCount));
-                    totalPageCount += 1;
-                    JsonNode entries = data.path("storeProductInfos");
-                    int pageItemCount = 0;
-                    if (entries.isArray()) {
-                        for (JsonNode entry : entries) {
-                            pageItemCount += 1;
-                            RawCatalogProduct product = toRawCatalogProduct(entry, categoryId);
-                            if (product == null || product.externalId().isBlank()) {
-                                continue;
-                            }
-                            byExternalId.putIfAbsent(product.externalId(), product);
-                        }
-                    }
-                    totalCollectedProductCount += pageItemCount;
-                    log.info(
-                            "migros category import progress: categoryId={}, page={}/{}, pageItemCount={}, uniqueProductCount={}",
-                            categoryId,
-                            page,
-                            pageCount,
-                            pageItemCount,
-                            byExternalId.size()
-                    );
-                    if (!entries.isArray() || entries.isEmpty()) {
-                        break;
-                    }
-                } catch (IOException ex) {
-                    log.warn("migros category import request failed: categoryId={}, page={}", categoryId, page, ex);
-                    break;
-                }
-                page += 1;
-            }
-        }
-
-        int createdCount = 0;
-        int updatedCount = 0;
-        if (!byExternalId.isEmpty()) {
-            List<String> keys = new ArrayList<>(byExternalId.keySet());
-            Map<String, MigrosCatalogProduct> existingByExternalId = new LinkedHashMap<>();
-            for (MigrosCatalogProduct existing : migrosCatalogProductRepository.findByExternalIdIn(keys)) {
-                existingByExternalId.put(existing.getExternalId(), existing);
-            }
-            List<MigrosCatalogProduct> toSave = new ArrayList<>();
-            LocalDateTime now = LocalDateTime.now();
-            for (RawCatalogProduct raw : byExternalId.values()) {
-                MigrosCatalogProduct target = existingByExternalId.get(raw.externalId());
-                boolean created = false;
-                if (target == null) {
-                    target = new MigrosCatalogProduct();
-                    target.setExternalId(raw.externalId());
-                    created = true;
-                }
-                boolean changed = applyRawProduct(target, raw, now);
-                if (created || changed) {
-                    toSave.add(target);
-                    if (created) {
-                        createdCount += 1;
-                    } else {
-                        updatedCount += 1;
-                    }
-                }
-            }
-            if (!toSave.isEmpty()) {
-                migrosCatalogProductRepository.saveAll(toSave);
-            }
-        }
+        ImportCollection collection = collectFromCategoryRange(sourceUrl, startCategoryId, endCategoryId);
+        PersistenceStats persistenceStats = persistRawProducts(collection.byExternalId());
 
         log.info(
                 "migros category import completed: categoryRange={}..{}, totalPageCount={}, totalCollectedProductCount={}, uniqueProductCount={}, createdCount={}, updatedCount={}",
                 startCategoryId,
                 endCategoryId,
-                totalPageCount,
-                totalCollectedProductCount,
-                byExternalId.size(),
-                createdCount,
-                updatedCount
+                collection.totalPageCount(),
+                collection.totalCollectedProductCount(),
+                collection.byExternalId().size(),
+                persistenceStats.createdCount(),
+                persistenceStats.updatedCount()
         );
         return new CatalogCategoryRangeImportResult(
                 Marketplace.MG.getCode(),
                 Math.max(0, endCategoryId - startCategoryId + 1),
-                totalPageCount,
-                totalCollectedProductCount,
-                byExternalId.size(),
-                createdCount,
-                updatedCount
+                collection.totalPageCount(),
+                collection.totalCollectedProductCount(),
+                collection.byExternalId().size(),
+                persistenceStats.createdCount(),
+                persistenceStats.updatedCount()
         );
+    }
+
+    private CatalogCategoryRangeImportResult emptyImportResult() {
+        return new CatalogCategoryRangeImportResult(Marketplace.MG.getCode(), 0, 0, 0, 0, 0, 0);
+    }
+
+    private ImportCollection collectFromCategoryRange(String sourceUrl, int startCategoryId, int endCategoryId) {
+        Map<String, RawCatalogProduct> byExternalId = new LinkedHashMap<>();
+        int totalPageCount = 0;
+        int totalCollectedProductCount = 0;
+
+        for (int categoryId = startCategoryId; categoryId <= endCategoryId; categoryId += 1) {
+            CategoryCollectStats categoryStats = collectCategory(sourceUrl, categoryId, byExternalId);
+            totalPageCount += categoryStats.totalPageCount();
+            totalCollectedProductCount += categoryStats.totalCollectedProductCount();
+        }
+
+        return new ImportCollection(byExternalId, totalPageCount, totalCollectedProductCount);
+    }
+
+    private CategoryCollectStats collectCategory(
+            String sourceUrl,
+            int categoryId,
+            Map<String, RawCatalogProduct> byExternalId
+    ) {
+        int totalPageCount = 0;
+        int totalCollectedProductCount = 0;
+        int page = 1;
+        int pageCount = 1;
+
+        while (page <= pageCount && page <= MAX_PAGE_LIMIT) {
+            PageCollectResult pageResult = collectPage(sourceUrl, categoryId, page, pageCount, byExternalId);
+            if (pageResult == null) {
+                break;
+            }
+            pageCount = pageResult.nextPageCount();
+            totalPageCount += 1;
+            totalCollectedProductCount += pageResult.pageItemCount();
+            if (pageResult.shouldStop()) {
+                break;
+            }
+            page += 1;
+        }
+
+        return new CategoryCollectStats(totalPageCount, totalCollectedProductCount);
+    }
+
+    private PageCollectResult collectPage(
+            String sourceUrl,
+            int categoryId,
+            int page,
+            int pageCount,
+            Map<String, RawCatalogProduct> byExternalId
+    ) {
+        String pagedUrl = withQueryParams(sourceUrl, categoryId, page);
+        if (pagedUrl.isBlank()) {
+            return null;
+        }
+
+        Request request = buildCatalogRequest(pagedUrl);
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                return null;
+            }
+
+            JsonNode data = readDataNode(response);
+            if (data == null) {
+                return null;
+            }
+
+            int resolvedPageCount = Math.max(pageCount, data.path("pageCount").asInt(pageCount));
+            JsonNode entries = data.path("storeProductInfos");
+            int pageItemCount = collectPageProducts(entries, categoryId, byExternalId);
+
+            log.info(
+                    "migros category import progress: categoryId={}, page={}/{}, pageItemCount={}, uniqueProductCount={}",
+                    categoryId,
+                    page,
+                    resolvedPageCount,
+                    pageItemCount,
+                    byExternalId.size()
+            );
+            boolean shouldStop = !entries.isArray() || entries.isEmpty();
+            return new PageCollectResult(resolvedPageCount, pageItemCount, shouldStop);
+        } catch (IOException ex) {
+            log.warn("migros category import request failed: categoryId={}, page={}", categoryId, page, ex);
+            return null;
+        }
+    }
+
+    private Request buildCatalogRequest(String pagedUrl) {
+        return new Request.Builder()
+                .url(pagedUrl)
+                .get()
+                .addHeader("Accept", "application/json")
+                .addHeader("Accept-Language", "tr")
+                .addHeader("Referer", "https://www.migros.com.tr/")
+                .addHeader("X-FORWARDED-REST", "true")
+                .addHeader("X-PWA", "true")
+                .addHeader("X-Device-PWA", "true")
+                .build();
+    }
+
+    private JsonNode readDataNode(Response response) throws IOException {
+        JsonNode root = objectMapper.readTree(response.body().string());
+        JsonNode data = root.path("data");
+        if (data.isMissingNode() || data.isNull()) {
+            return null;
+        }
+        return data;
+    }
+
+    private int collectPageProducts(JsonNode entries, int categoryId, Map<String, RawCatalogProduct> byExternalId) {
+        if (!entries.isArray()) {
+            return 0;
+        }
+        int pageItemCount = 0;
+        for (JsonNode entry : entries) {
+            pageItemCount += 1;
+            RawCatalogProduct product = toRawCatalogProduct(entry, categoryId);
+            if (product == null || product.externalId().isBlank()) {
+                continue;
+            }
+            byExternalId.putIfAbsent(product.externalId(), product);
+        }
+        return pageItemCount;
+    }
+
+    private PersistenceStats persistRawProducts(Map<String, RawCatalogProduct> byExternalId) {
+        if (byExternalId.isEmpty()) {
+            return new PersistenceStats(0, 0);
+        }
+
+        List<String> keys = new ArrayList<>(byExternalId.keySet());
+        Map<String, MigrosCatalogProduct> existingByExternalId = new LinkedHashMap<>();
+        for (MigrosCatalogProduct existing : migrosCatalogProductRepository.findByExternalIdIn(keys)) {
+            existingByExternalId.put(existing.getExternalId(), existing);
+        }
+
+        List<MigrosCatalogProduct> toSave = new ArrayList<>();
+        LocalDateTime now = LocalDateTime.now();
+        int createdCount = 0;
+        int updatedCount = 0;
+
+        for (RawCatalogProduct raw : byExternalId.values()) {
+            MigrosCatalogProduct target = existingByExternalId.get(raw.externalId());
+            boolean created = false;
+            if (target == null) {
+                target = new MigrosCatalogProduct();
+                target.setExternalId(raw.externalId());
+                created = true;
+            }
+            boolean changed = applyRawProduct(target, raw, now);
+            if (created || changed) {
+                toSave.add(target);
+                if (created) {
+                    createdCount += 1;
+                } else {
+                    updatedCount += 1;
+                }
+            }
+        }
+
+        if (!toSave.isEmpty()) {
+            migrosCatalogProductRepository.saveAll(toSave);
+        }
+        return new PersistenceStats(createdCount, updatedCount);
     }
 
     private boolean applyRawProduct(
@@ -290,6 +362,32 @@ public class MigrosCatalogCategoryRangeImportService implements MarketplaceCatal
             BigDecimal shownPrice,
             String unitPrice,
             Integer discountRate
+    ) {
+    }
+
+    private record PageCollectResult(
+            int nextPageCount,
+            int pageItemCount,
+            boolean shouldStop
+    ) {
+    }
+
+    private record CategoryCollectStats(
+            int totalPageCount,
+            int totalCollectedProductCount
+    ) {
+    }
+
+    private record ImportCollection(
+            Map<String, RawCatalogProduct> byExternalId,
+            int totalPageCount,
+            int totalCollectedProductCount
+    ) {
+    }
+
+    private record PersistenceStats(
+            int createdCount,
+            int updatedCount
     ) {
     }
 }

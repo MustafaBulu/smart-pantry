@@ -139,34 +139,11 @@ public class YemeksepetiCategoryFetchService implements MarketplaceCategoryFetch
         Map<String, MarketplaceProductCandidate> candidates = new LinkedHashMap<>();
         int offset = 0;
         for (int page = 0; page < MAX_PAGES; page += 1) {
-            String responseBody = fetchSearchResponse(trimmed, offset);
-            if (responseBody == null || responseBody.isBlank()) {
+            PageCollectResult result = collectSearchPage(trimmed, offset, candidates);
+            if (result == null) {
                 break;
             }
-            JsonNode root;
-            try {
-                root = objectMapper.readTree(responseBody);
-            } catch (IOException ex) {
-                log.warn("Yemeksepeti search response parse failed.", ex);
-                break;
-            }
-            JsonNode searchProducts = root.path("data").path("searchProducts");
-            if (searchProducts.isMissingNode() || searchProducts.isNull()) {
-                JsonNode errors = root.path("errors");
-                if (!errors.isMissingNode() && !errors.isNull()) {
-                    log.warn("Yemeksepeti search returned null data. errors={}", errors);
-                } else {
-                    log.warn("Yemeksepeti search returned null data. bodySize={}", responseBody.length());
-                }
-                break;
-            }
-
-            JsonNode items = searchProducts.path("products").path("items");
-            int beforeCount = candidates.size();
-            collectCandidates(candidates, items);
-            int pageItemCount = items.isArray() ? items.size() : 0;
-            int addedCount = candidates.size() - beforeCount;
-            if (pageItemCount < LIMIT || addedCount <= 0) {
+            if (result.shouldStop()) {
                 break;
             }
             offset += LIMIT;
@@ -180,6 +157,51 @@ public class YemeksepetiCategoryFetchService implements MarketplaceCategoryFetch
                 durationMs
         );
         return result;
+    }
+
+    private PageCollectResult collectSearchPage(
+            String query,
+            int offset,
+            Map<String, MarketplaceProductCandidate> candidates
+    ) {
+        String responseBody = fetchSearchResponse(query, offset);
+        if (responseBody == null || responseBody.isBlank()) {
+            return null;
+        }
+        JsonNode root = parseSearchResponse(responseBody);
+        if (root == null) {
+            return null;
+        }
+        JsonNode searchProducts = root.path("data").path("searchProducts");
+        if (searchProducts.isMissingNode() || searchProducts.isNull()) {
+            logMissingSearchProducts(root, responseBody);
+            return null;
+        }
+        JsonNode items = searchProducts.path("products").path("items");
+        int beforeCount = candidates.size();
+        collectCandidates(candidates, items);
+        int pageItemCount = items.isArray() ? items.size() : 0;
+        int addedCount = candidates.size() - beforeCount;
+        boolean shouldStop = pageItemCount < LIMIT || addedCount <= 0;
+        return new PageCollectResult(shouldStop);
+    }
+
+    private JsonNode parseSearchResponse(String responseBody) {
+        try {
+            return objectMapper.readTree(responseBody);
+        } catch (IOException ex) {
+            log.warn("Yemeksepeti search response parse failed.", ex);
+            return null;
+        }
+    }
+
+    private void logMissingSearchProducts(JsonNode root, String responseBody) {
+        JsonNode errors = root.path("errors");
+        if (!errors.isMissingNode() && !errors.isNull()) {
+            log.warn("Yemeksepeti search returned null data. errors={}", errors);
+            return;
+        }
+        log.warn("Yemeksepeti search returned null data. bodySize={}", responseBody.length());
     }
 
     @SuppressWarnings("HttpHeaderName")
@@ -565,6 +587,9 @@ public class YemeksepetiCategoryFetchService implements MarketplaceCategoryFetch
     }
 
     private record NormalizedAmount(String unit, Integer value) {
+    }
+
+    private record PageCollectResult(boolean shouldStop) {
     }
 }
 

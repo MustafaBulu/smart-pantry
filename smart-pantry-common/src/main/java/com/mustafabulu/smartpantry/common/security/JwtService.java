@@ -46,7 +46,7 @@ public class JwtService {
                     .parseSignedClaims(token)
                     .getPayload();
             return Optional.of(claims);
-        } catch (Exception ignored) {
+        } catch (RuntimeException ex) {
             return Optional.empty();
         }
     }

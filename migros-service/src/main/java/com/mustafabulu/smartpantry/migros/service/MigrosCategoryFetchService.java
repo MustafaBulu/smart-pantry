@@ -123,71 +123,106 @@ public class MigrosCategoryFetchService implements MarketplaceCategoryFetchServi
         int page = 1;
         int pageCount = 1;
         while (page <= pageCount && page <= MAX_SEARCH_PAGES) {
-            String pagedUrl = withPageParam(sourceUrl, page);
-            if (pagedUrl.isBlank()) {
+            PageFetchResult pageFetchResult = fetchCatalogUrlPage(sourceUrl, page, pageCount, productsByExternalId);
+            if (pageFetchResult == null) {
                 break;
             }
-            Request request = new Request.Builder()
-                    .url(pagedUrl)
-                    .get()
-                    .addHeader("Accept", "application/json")
-                    .addHeader("Accept-Language", "tr")
-                    .addHeader("Referer", "https://www.migros.com.tr/")
-                    .addHeader("X-FORWARDED-REST", "true")
-                    .addHeader("X-PWA", "true")
-                    .addHeader("X-Device-PWA", "true")
-                    .build();
-            try (Response response = httpClient.newCall(request).execute()) {
-                if (!response.isSuccessful() || response.body() == null) {
-                    break;
-                }
-                JsonNode root = objectMapper.readTree(response.body().string());
-                JsonNode dataNode = root.path("data");
-                JsonNode searchInfo = dataNode.path("searchInfo");
-                if (searchInfo.isMissingNode() || searchInfo.isNull()) {
-                    searchInfo = dataNode;
-                }
-                if (searchInfo.isMissingNode() || searchInfo.isNull()) {
-                    break;
-                }
-                pageCount = Math.max(pageCount, searchInfo.path("pageCount").asInt(pageCount));
-                JsonNode entries = searchInfo.path("storeProductInfos");
-                Map<String, QuantityInfo> quantityByExternalId = new HashMap<>();
-                if (entries.isArray()) {
-                    for (JsonNode entry : entries) {
-                        String externalId = entry.path("id").asText("").trim();
-                        if (externalId.isBlank()) {
-                            continue;
-                        }
-                        String categoryName = extractCategoryName(entry);
-                        MarketplaceProductCandidate candidate = toCandidate(entry, categoryName, quantityByExternalId);
-                        if (candidate == null) {
-                            continue;
-                        }
-                        productsByExternalId.putIfAbsent(
-                                externalId.toLowerCase(),
-                                new CatalogUrlProductCandidate(categoryName, candidate)
-                        );
-                    }
-                }
-                int pageItemCount = entries.isArray() ? entries.size() : 0;
-                log.info(
-                        "migros catalog URL fetch page completed: page={}, pageCount={}, pageItemCount={}, uniqueProductCount={}",
-                        page,
-                        pageCount,
-                        pageItemCount,
-                        productsByExternalId.size()
-                );
-                if (!entries.isArray() || entries.isEmpty()) {
-                    break;
-                }
-            } catch (IOException ex) {
-                log.warn("migros catalog URL fetch failed: page={}, url={}", page, sourceUrl, ex);
+            pageCount = pageFetchResult.nextPageCount();
+            if (pageFetchResult.shouldStop()) {
                 break;
             }
             page += 1;
         }
         return new ArrayList<>(productsByExternalId.values());
+    }
+
+    private PageFetchResult fetchCatalogUrlPage(
+            String sourceUrl,
+            int page,
+            int pageCount,
+            Map<String, CatalogUrlProductCandidate> productsByExternalId
+    ) {
+        String pagedUrl = withPageParam(sourceUrl, page);
+        if (pagedUrl.isBlank()) {
+            return null;
+        }
+        Request request = buildMigrosCatalogRequest(pagedUrl);
+        try (Response response = httpClient.newCall(request).execute()) {
+            JsonNode searchInfo = readSearchInfoNode(response);
+            if (searchInfo == null) {
+                return null;
+            }
+            int nextPageCount = Math.max(pageCount, searchInfo.path("pageCount").asInt(pageCount));
+            JsonNode entries = searchInfo.path("storeProductInfos");
+            int pageItemCount = collectCatalogUrlPageEntries(entries, productsByExternalId);
+            log.info(
+                    "migros catalog URL fetch page completed: page={}, pageCount={}, pageItemCount={}, uniqueProductCount={}",
+                    page,
+                    nextPageCount,
+                    pageItemCount,
+                    productsByExternalId.size()
+            );
+            boolean shouldStop = !entries.isArray() || entries.isEmpty();
+            return new PageFetchResult(nextPageCount, shouldStop);
+        } catch (IOException ex) {
+            log.warn("migros catalog URL fetch failed: page={}, url={}", page, sourceUrl, ex);
+            return null;
+        }
+    }
+
+    private Request buildMigrosCatalogRequest(String pagedUrl) {
+        return new Request.Builder()
+                .url(pagedUrl)
+                .get()
+                .addHeader("Accept", "application/json")
+                .addHeader("Accept-Language", "tr")
+                .addHeader("Referer", "https://www.migros.com.tr/")
+                .addHeader("X-FORWARDED-REST", "true")
+                .addHeader("X-PWA", "true")
+                .addHeader("X-Device-PWA", "true")
+                .build();
+    }
+
+    private JsonNode readSearchInfoNode(Response response) throws IOException {
+        if (!response.isSuccessful() || response.body() == null) {
+            return null;
+        }
+        JsonNode root = objectMapper.readTree(response.body().string());
+        JsonNode dataNode = root.path("data");
+        JsonNode searchInfo = dataNode.path("searchInfo");
+        if (searchInfo.isMissingNode() || searchInfo.isNull()) {
+            searchInfo = dataNode;
+        }
+        if (searchInfo.isMissingNode() || searchInfo.isNull()) {
+            return null;
+        }
+        return searchInfo;
+    }
+
+    private int collectCatalogUrlPageEntries(
+            JsonNode entries,
+            Map<String, CatalogUrlProductCandidate> productsByExternalId
+    ) {
+        if (!entries.isArray()) {
+            return 0;
+        }
+        Map<String, QuantityInfo> quantityByExternalId = new HashMap<>();
+        for (JsonNode entry : entries) {
+            String externalId = entry.path("id").asText("").trim();
+            if (externalId.isBlank()) {
+                continue;
+            }
+            String categoryName = extractCategoryName(entry);
+            MarketplaceProductCandidate candidate = toCandidate(entry, categoryName, quantityByExternalId);
+            if (candidate == null) {
+                continue;
+            }
+            productsByExternalId.putIfAbsent(
+                    externalId.toLowerCase(),
+                    new CatalogUrlProductCandidate(categoryName, candidate)
+            );
+        }
+        return entries.size();
     }
 
     @Override
@@ -268,7 +303,10 @@ public class MigrosCategoryFetchService implements MarketplaceCategoryFetchServi
         if (fromName.amount() != null && fromName.unit() != null) {
             return new QuantityInfo(fromName.amount(), fromName.unit(), packCount);
         }
+        return parseQuantityFromCatalogUnitPrice(row, packCount);
+    }
 
+    private QuantityInfo parseQuantityFromCatalogUnitPrice(MigrosCatalogProduct row, Integer packCount) {
         String unitPriceText = row.getUnitPrice();
         if (unitPriceText == null || unitPriceText.isBlank()) {
             return new QuantityInfo(null, null, packCount);
@@ -611,53 +649,41 @@ public class MigrosCategoryFetchService implements MarketplaceCategoryFetchServi
         if (fromPropertyInfos.amount() != null && fromPropertyInfos.unit() != null) {
             return new QuantityInfo(fromPropertyInfos.amount(), fromPropertyInfos.unit(), packCount);
         }
+        QuantityInfo fromProductDetails = resolveQuantityFromProductDetails(externalId, quantityByExternalId);
 
         String unitPriceText = entry.path("unitPrice").asText("");
         if (unitPriceText.isBlank()) {
-            QuantityInfo fromProductDetails = resolveQuantityFromProductDetails(externalId, quantityByExternalId);
-            if (fromProductDetails.amount() != null && fromProductDetails.unit() != null) {
-                return new QuantityInfo(fromProductDetails.amount(), fromProductDetails.unit(), packCount);
-            }
-            return new QuantityInfo(null, null, packCount);
+            return withPackCountOrEmpty(fromProductDetails, packCount);
         }
         Matcher matcher = UNIT_PRICE_PATTERN.matcher(unitPriceText);
         if (!matcher.find()) {
-            QuantityInfo fromProductDetails = resolveQuantityFromProductDetails(externalId, quantityByExternalId);
-            if (fromProductDetails.amount() != null && fromProductDetails.unit() != null) {
-                return new QuantityInfo(fromProductDetails.amount(), fromProductDetails.unit(), packCount);
-            }
-            return new QuantityInfo(null, null, packCount);
+            return withPackCountOrEmpty(fromProductDetails, packCount);
         }
         Double unitRate = parseLocalizedDecimal(matcher.group(1));
         String rawPerUnit = matcher.group(2);
         String normalizedUnit = normalizeUnit(rawPerUnit);
         if (unitRate == null || unitRate <= 0d || normalizedUnit == null) {
-            QuantityInfo fromProductDetails = resolveQuantityFromProductDetails(externalId, quantityByExternalId);
-            if (fromProductDetails.amount() != null && fromProductDetails.unit() != null) {
-                return new QuantityInfo(fromProductDetails.amount(), fromProductDetails.unit(), packCount);
-            }
-            return new QuantityInfo(null, null, packCount);
+            return withPackCountOrEmpty(fromProductDetails, packCount);
         }
         BigDecimal referencePrice = moneyPrice != null && moneyPrice.compareTo(BigDecimal.ZERO) > 0 ? moneyPrice : price;
         if (referencePrice == null || referencePrice.compareTo(BigDecimal.ZERO) <= 0) {
-            QuantityInfo fromProductDetails = resolveQuantityFromProductDetails(externalId, quantityByExternalId);
-            if (fromProductDetails.amount() != null && fromProductDetails.unit() != null) {
-                return new QuantityInfo(fromProductDetails.amount(), fromProductDetails.unit(), packCount);
-            }
-            return new QuantityInfo(null, null, packCount);
+            return withPackCountOrEmpty(fromProductDetails, packCount);
         }
         double multiplier = ("kg".equalsIgnoreCase(rawPerUnit) || "l".equalsIgnoreCase(rawPerUnit))
                 ? 1000d
                 : 1d;
         double resolved = (referencePrice.doubleValue() / unitRate) * multiplier;
         if (!Double.isFinite(resolved) || resolved <= 0d) {
-            QuantityInfo fromProductDetails = resolveQuantityFromProductDetails(externalId, quantityByExternalId);
-            if (fromProductDetails.amount() != null && fromProductDetails.unit() != null) {
-                return new QuantityInfo(fromProductDetails.amount(), fromProductDetails.unit(), packCount);
-            }
-            return new QuantityInfo(null, null, packCount);
+            return withPackCountOrEmpty(fromProductDetails, packCount);
         }
         return new QuantityInfo(resolved, normalizedUnit, packCount);
+    }
+
+    private QuantityInfo withPackCountOrEmpty(QuantityInfo source, Integer packCount) {
+        if (source != null && source.amount() != null && source.unit() != null) {
+            return new QuantityInfo(source.amount(), source.unit(), packCount);
+        }
+        return new QuantityInfo(null, null, packCount);
     }
 
     private QuantityInfo resolveQuantityFromProductDetails(
@@ -708,19 +734,7 @@ public class MigrosCategoryFetchService implements MarketplaceCategoryFetchServi
             return new QuantityInfo(null, null, null);
         }
 
-        String rawValue = null;
-        for (JsonNode node : mainInfos) {
-            String customId = node.path("customId").asText("").trim();
-            String name = node.path("name").asText("").trim().toLowerCase();
-            boolean netAmountField = "netKg".equalsIgnoreCase(customId) || name.contains("net miktar");
-            if (!netAmountField) {
-                continue;
-            }
-            rawValue = node.path("value").asText("").trim();
-            if (!rawValue.isBlank()) {
-                break;
-            }
-        }
+        String rawValue = extractNetAmountRawValue(mainInfos);
         if (rawValue == null || rawValue.isBlank()) {
             return new QuantityInfo(null, null, null);
         }
@@ -740,6 +754,22 @@ public class MigrosCategoryFetchService implements MarketplaceCategoryFetchServi
             normalizedFromUnitPrice = "g";
         }
         return new QuantityInfo(numeric, normalizedFromUnitPrice, null);
+    }
+
+    private String extractNetAmountRawValue(JsonNode mainInfos) {
+        for (JsonNode node : mainInfos) {
+            String customId = node.path("customId").asText("").trim();
+            String name = node.path("name").asText("").trim().toLowerCase();
+            boolean netAmountField = "netKg".equalsIgnoreCase(customId) || name.contains("net miktar");
+            if (!netAmountField) {
+                continue;
+            }
+            String rawValue = node.path("value").asText("").trim();
+            if (!rawValue.isBlank()) {
+                return rawValue;
+            }
+        }
+        return null;
     }
 
     private QuantityInfo parseAmountWithUnit(String rawValue) {
@@ -841,6 +871,12 @@ public class MigrosCategoryFetchService implements MarketplaceCategoryFetchServi
     }
 
     private record QuantityInfo(Double amount, String unit, Integer packCount) {
+    }
+
+    private record PageFetchResult(
+            int nextPageCount,
+            boolean shouldStop
+    ) {
     }
 
 }

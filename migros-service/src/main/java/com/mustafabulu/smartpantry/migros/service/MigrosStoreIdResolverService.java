@@ -123,7 +123,7 @@ public class MigrosStoreIdResolverService {
         if (cookieToUse == null || cookieToUse.isBlank()) {
             try {
                 migrosCookieSessionService.refreshFromSelenium();
-            } catch (Exception ignored) {
+            } catch (RuntimeException ex) {
                 cookieToUse = migrosDeliveryCookie;
             }
             if (cookieToUse == null || cookieToUse.isBlank()) {

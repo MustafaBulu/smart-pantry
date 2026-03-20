@@ -49,7 +49,10 @@ jobs:
     name: SonarCloud
     runs-on: ubuntu-latest
     needs: [backend, frontend]
-    if: ${{ secrets.SONAR_TOKEN != '' }}
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
+      SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -61,10 +64,7 @@ jobs:
           java-version: "21"
           cache: maven
       - name: SonarCloud Scan
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
-          SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+        if: ${{ env.SONAR_TOKEN != '' }}
         run: |
           PROJECT_KEY="${SONAR_PROJECT_KEY:-${GITHUB_REPOSITORY/\//_}}"
           ORGANIZATION="${SONAR_ORGANIZATION:-${GITHUB_REPOSITORY_OWNER}}"
@@ -73,3 +73,6 @@ jobs:
             -Dsonar.token="${SONAR_TOKEN}" \
             -Dsonar.organization="${ORGANIZATION}" \
             -Dsonar.projectKey="${PROJECT_KEY}"
+      - name: SonarCloud Skip (No Token)
+        if: ${{ env.SONAR_TOKEN == '' }}
+        run: echo "SONAR_TOKEN is not set. Skipping SonarCloud scan."

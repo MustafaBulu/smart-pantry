@@ -8,7 +8,6 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
-import org.springframework.lang.NonNull;
 import org.springframework.lang.Nullable;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
@@ -41,10 +40,10 @@ public class SPExceptionHandler extends ResponseEntityExceptionHandler {
 
     @Override
     protected ResponseEntity<Object> handleMethodArgumentNotValid(
-            @NonNull MethodArgumentNotValidException ex,
-            @NonNull HttpHeaders headers,
-            @NonNull HttpStatusCode status,
-            @NonNull WebRequest request
+            MethodArgumentNotValidException ex,
+            HttpHeaders headers,
+            HttpStatusCode status,
+            WebRequest request
     ) {
         log.error(
                 "{} path={}, detail={}",
@@ -93,10 +92,10 @@ public class SPExceptionHandler extends ResponseEntityExceptionHandler {
 
     @Override
     protected ResponseEntity<Object> handleMissingServletRequestParameter(
-            @NonNull MissingServletRequestParameterException ex,
-            @NonNull HttpHeaders headers,
-            @NonNull HttpStatusCode status,
-            @NonNull WebRequest request
+            MissingServletRequestParameterException ex,
+            HttpHeaders headers,
+            HttpStatusCode status,
+            WebRequest request
     ) {
         log.error(
                 "{} path={} missing servlet request parameter: {}",
@@ -153,11 +152,11 @@ public class SPExceptionHandler extends ResponseEntityExceptionHandler {
 
     @Override
     protected ResponseEntity<Object> handleExceptionInternal(
-            @NonNull Exception ex,
+            Exception ex,
             @Nullable Object body,
-            @NonNull HttpHeaders headers,
-            @NonNull HttpStatusCode statusCode,
-            @NonNull WebRequest request
+            HttpHeaders headers,
+            HttpStatusCode statusCode,
+            WebRequest request
     ) {
         log.error(
                 "{} path={} message={}",

@@ -224,62 +224,22 @@ public class MarketplaceProductService {
         if (marketplace == null) {
             return;
         }
-        int categoryCount = 0;
-        int candidateCount = 0;
-        int createdCount = 0;
-        int updatedCount = 0;
         MarketplaceProductConnector connector = connectorRegistry.get(marketplace).orElse(null);
+        SyncStats totals = new SyncStats(0, 0, 0, 0);
 
         List<Category> categories = categoryRepository.findAll().stream()
                 .filter(category -> category.getName() != null && !category.getName().isBlank())
                 .toList();
         for (Category category : categories) {
-            categoryCount += 1;
-            Map<String, MarketplaceMetadata> fetched = fetchMetadataByExternalId(marketplace, category.getName());
-            candidateCount += fetched.size();
-            if (fetched.isEmpty()) {
-                continue;
-            }
-
-            Map<String, MarketplaceProduct> existingByExternalId = loadExistingByExternalId(marketplace, category);
-
-            List<MarketplaceProduct> toSave = new ArrayList<>();
-            for (Map.Entry<String, MarketplaceMetadata> entry : fetched.entrySet()) {
-                String externalId = normalizeExternalId(entry.getKey());
-                if (externalId == null) {
-                    continue;
-                }
-                PreparedMarketplaceProduct prepared = prepareMarketplaceProduct(
-                        marketplace,
-                        category,
-                        externalId,
-                        connector,
-                        existingByExternalId
-                );
-                MarketplaceProduct marketplaceProduct = prepared.product();
-                boolean created = prepared.created();
-
-                boolean updated = applyCatalogMetadata(marketplaceProduct, entry.getValue());
-                if (created || updated) {
-                    toSave.add(marketplaceProduct);
-                    if (created) {
-                        createdCount += 1;
-                    } else {
-                        updatedCount += 1;
-                    }
-                }
-            }
-            if (!toSave.isEmpty()) {
-                marketplaceProductRepository.saveAll(toSave);
-            }
+            totals = totals.plus(syncCatalogForCategory(marketplace, category, connector));
         }
         log.info(
                 "catalog sync completed: marketplace={}, categoryCount={}, candidateCount={}, createdCount={}, updatedCount={}",
                 marketplace.getCode(),
-                categoryCount,
-                candidateCount,
-                createdCount,
-                updatedCount
+                totals.categoryCount(),
+                totals.candidateCount(),
+                totals.createdCount(),
+                totals.updatedCount()
         );
     }
 
@@ -291,94 +251,188 @@ public class MarketplaceProductService {
         if (catalogUrlFetchResolverService == null) {
             return new CatalogSyncResult(marketplace.getCode(), 0, 0, 0, 0);
         }
-        int categoryCount = 0;
-        int candidateCount = 0;
-        int createdCount = 0;
-        int updatedCount = 0;
         MarketplaceProductConnector connector = connectorRegistry.get(marketplace).orElse(null);
         Map<String, Category> categoryByName = new LinkedHashMap<>();
         Map<String, Map<String, MarketplaceProduct>> existingByCategoryKey = new LinkedHashMap<>();
+        SyncStats totals = new SyncStats(0, 0, 0, 0);
         for (String sourceUrl : sourceUrls) {
-            List<MarketplaceCatalogUrlFetchService.CatalogUrlProductCandidate> fetched =
-                    catalogUrlFetchResolverService.fetchAllByUrl(marketplace, sourceUrl);
-            candidateCount += fetched.size();
-            for (MarketplaceCatalogUrlFetchService.CatalogUrlProductCandidate fetchedCandidate : fetched) {
-                MarketplaceCategoryFetchService.MarketplaceProductCandidate candidate = fetchedCandidate.candidate();
-                if (candidate == null || candidate.externalId() == null || candidate.externalId().isBlank()) {
-                    continue;
-                }
-                String rawCategoryName = fetchedCandidate.categoryName();
-                String normalizedCategoryName = rawCategoryName == null || rawCategoryName.isBlank()
-                        ? "Genel"
-                        : rawCategoryName.trim();
-                String normalizedCategoryKey = normalizeCategoryName(normalizedCategoryName);
-                Category category = categoryByName.get(normalizedCategoryKey);
-                if (category == null) {
-                    category = categoryRepository.findByNameIgnoreCase(normalizedCategoryName)
-                            .orElseGet(() -> {
-                                Category createdCategory = new Category();
-                                createdCategory.setName(normalizedCategoryName);
-                                return categoryRepository.save(createdCategory);
-                            });
-                    categoryByName.put(normalizedCategoryKey, category);
-                    categoryCount += 1;
-                }
-                Map<String, MarketplaceProduct> existingByExternalId = existingByCategoryKey.get(normalizedCategoryKey);
-                if (existingByExternalId == null) {
-                    existingByExternalId = loadExistingByExternalId(marketplace, category);
-                    existingByCategoryKey.put(normalizedCategoryKey, existingByExternalId);
-                }
-                String externalId = normalizeExternalId(candidate.externalId());
-                if (externalId == null) {
-                    continue;
-                }
-                PreparedMarketplaceProduct prepared = prepareMarketplaceProduct(
-                        marketplace,
-                        category,
-                        externalId,
-                        connector,
-                        existingByExternalId
-                );
-                MarketplaceProduct marketplaceProduct = prepared.product();
-                boolean created = prepared.created();
-                MarketplaceMetadata metadata = new MarketplaceMetadata(
-                        candidate.brandName(),
-                        candidate.imageUrl(),
-                        candidate.moneyPrice(),
-                        candidate.basketDiscountThreshold(),
-                        candidate.basketDiscountPrice(),
-                        candidate.campaignBuyQuantity(),
-                        candidate.campaignPayQuantity(),
-                        candidate.effectivePrice()
-                );
-                boolean updated = applyCatalogMetadata(marketplaceProduct, metadata);
-                if (created || updated) {
-                    MarketplaceProduct saved = marketplaceProductRepository.save(marketplaceProduct);
-                    existingByExternalId.put(normalizeCategoryName(externalId), saved);
-                    if (created) {
-                        createdCount += 1;
-                    } else {
-                        updatedCount += 1;
-                    }
-                }
-            }
+            totals = totals.plus(syncCatalogForUrl(
+                    marketplace,
+                    sourceUrl,
+                    connector,
+                    categoryByName,
+                    existingByCategoryKey
+            ));
         }
         log.info(
                 "catalog sync from URLs completed: marketplace={}, sourceUrlCount={}, categoryCount={}, candidateCount={}, createdCount={}, updatedCount={}",
                 marketplace.getCode(),
                 sourceUrls.size(),
-                categoryCount,
-                candidateCount,
-                createdCount,
-                updatedCount
+                totals.categoryCount(),
+                totals.candidateCount(),
+                totals.createdCount(),
+                totals.updatedCount()
         );
         return new CatalogSyncResult(
                 marketplace.getCode(),
-                categoryCount,
-                candidateCount,
-                createdCount,
-                updatedCount
+                totals.categoryCount(),
+                totals.candidateCount(),
+                totals.createdCount(),
+                totals.updatedCount()
         );
+    }
+
+    private SyncStats syncCatalogForCategory(
+            Marketplace marketplace,
+            Category category,
+            MarketplaceProductConnector connector
+    ) {
+        Map<String, MarketplaceMetadata> fetched = fetchMetadataByExternalId(marketplace, category.getName());
+        if (fetched.isEmpty()) {
+            return new SyncStats(1, 0, 0, 0);
+        }
+        Map<String, MarketplaceProduct> existingByExternalId = loadExistingByExternalId(marketplace, category);
+        List<MarketplaceProduct> toSave = new ArrayList<>();
+        int createdCount = 0;
+        int updatedCount = 0;
+        for (Map.Entry<String, MarketplaceMetadata> entry : fetched.entrySet()) {
+            String externalId = normalizeExternalId(entry.getKey());
+            if (externalId == null) {
+                continue;
+            }
+            PreparedMarketplaceProduct prepared = prepareMarketplaceProduct(
+                    marketplace,
+                    category,
+                    externalId,
+                    connector,
+                    existingByExternalId
+            );
+            MarketplaceProduct marketplaceProduct = prepared.product();
+            boolean created = prepared.created();
+            boolean updated = applyCatalogMetadata(marketplaceProduct, entry.getValue());
+            if (!created && !updated) {
+                continue;
+            }
+            toSave.add(marketplaceProduct);
+            if (created) {
+                createdCount += 1;
+            } else {
+                updatedCount += 1;
+            }
+        }
+        if (!toSave.isEmpty()) {
+            marketplaceProductRepository.saveAll(toSave);
+        }
+        return new SyncStats(1, fetched.size(), createdCount, updatedCount);
+    }
+
+    private SyncStats syncCatalogForUrl(
+            Marketplace marketplace,
+            String sourceUrl,
+            MarketplaceProductConnector connector,
+            Map<String, Category> categoryByName,
+            Map<String, Map<String, MarketplaceProduct>> existingByCategoryKey
+    ) {
+        List<MarketplaceCatalogUrlFetchService.CatalogUrlProductCandidate> fetched =
+                catalogUrlFetchResolverService.fetchAllByUrl(marketplace, sourceUrl);
+        int categoryCount = 0;
+        int createdCount = 0;
+        int updatedCount = 0;
+        for (MarketplaceCatalogUrlFetchService.CatalogUrlProductCandidate fetchedCandidate : fetched) {
+            UrlCandidateContext context = resolveUrlCandidateContext(
+                    marketplace,
+                    fetchedCandidate,
+                    categoryByName,
+                    existingByCategoryKey
+            );
+            if (context == null) {
+                continue;
+            }
+            if (context.newCategory()) {
+                categoryCount += 1;
+            }
+            SyncStats persisted = persistUrlCandidate(context, connector);
+            createdCount += persisted.createdCount();
+            updatedCount += persisted.updatedCount();
+        }
+        return new SyncStats(categoryCount, fetched.size(), createdCount, updatedCount);
+    }
+
+    private UrlCandidateContext resolveUrlCandidateContext(
+            Marketplace marketplace,
+            MarketplaceCatalogUrlFetchService.CatalogUrlProductCandidate fetchedCandidate,
+            Map<String, Category> categoryByName,
+            Map<String, Map<String, MarketplaceProduct>> existingByCategoryKey
+    ) {
+        MarketplaceCategoryFetchService.MarketplaceProductCandidate candidate = fetchedCandidate.candidate();
+        if (candidate == null || candidate.externalId() == null || candidate.externalId().isBlank()) {
+            return null;
+        }
+        String normalizedCategoryName = normalizeUrlCategoryName(fetchedCandidate.categoryName());
+        String normalizedCategoryKey = normalizeCategoryName(normalizedCategoryName);
+        boolean newCategory = false;
+        Category category = categoryByName.get(normalizedCategoryKey);
+        if (category == null) {
+            category = categoryRepository.findByNameIgnoreCase(normalizedCategoryName)
+                    .orElseGet(() -> {
+                        Category createdCategory = new Category();
+                        createdCategory.setName(normalizedCategoryName);
+                        return categoryRepository.save(createdCategory);
+                    });
+            categoryByName.put(normalizedCategoryKey, category);
+            newCategory = true;
+        }
+        Map<String, MarketplaceProduct> existingByExternalId = existingByCategoryKey.get(normalizedCategoryKey);
+        if (existingByExternalId == null) {
+            existingByExternalId = loadExistingByExternalId(marketplace, category);
+            existingByCategoryKey.put(normalizedCategoryKey, existingByExternalId);
+        }
+        String externalId = normalizeExternalId(candidate.externalId());
+        if (externalId == null) {
+            return null;
+        }
+        return new UrlCandidateContext(marketplace, category, existingByExternalId, candidate, externalId, newCategory);
+    }
+
+    private SyncStats persistUrlCandidate(
+            UrlCandidateContext context,
+            MarketplaceProductConnector connector
+    ) {
+        MarketplaceMetadata metadata = new MarketplaceMetadata(
+                context.candidate().brandName(),
+                context.candidate().imageUrl(),
+                context.candidate().moneyPrice(),
+                context.candidate().basketDiscountThreshold(),
+                context.candidate().basketDiscountPrice(),
+                context.candidate().campaignBuyQuantity(),
+                context.candidate().campaignPayQuantity(),
+                context.candidate().effectivePrice()
+        );
+        PreparedMarketplaceProduct prepared = prepareMarketplaceProduct(
+                context.marketplace(),
+                context.category(),
+                context.externalId(),
+                connector,
+                context.existingByExternalId()
+        );
+        MarketplaceProduct marketplaceProduct = prepared.product();
+        boolean created = prepared.created();
+        boolean updated = applyCatalogMetadata(marketplaceProduct, metadata);
+        if (!created && !updated) {
+            return new SyncStats(0, 0, 0, 0);
+        }
+        MarketplaceProduct saved = marketplaceProductRepository.save(marketplaceProduct);
+        context.existingByExternalId().put(normalizeCategoryName(context.externalId()), saved);
+        return created
+                ? new SyncStats(0, 0, 1, 0)
+                : new SyncStats(0, 0, 0, 1);
+    }
+
+    private String normalizeUrlCategoryName(String rawCategoryName) {
+        if (rawCategoryName == null || rawCategoryName.isBlank()) {
+            return "Genel";
+        }
+        return rawCategoryName.trim();
     }
 
     private String normalizeExternalId(String externalId) {
@@ -736,6 +790,32 @@ public class MarketplaceProductService {
             return RefreshProductResult.badRequest(ResponseMessages.MARKETPLACE_REFRESH_FAILED);
         }
         return RefreshProductResult.ok();
+    }
+
+    private record SyncStats(
+            int categoryCount,
+            int candidateCount,
+            int createdCount,
+            int updatedCount
+    ) {
+        private SyncStats plus(SyncStats other) {
+            return new SyncStats(
+                    categoryCount + other.categoryCount,
+                    candidateCount + other.candidateCount,
+                    createdCount + other.createdCount,
+                    updatedCount + other.updatedCount
+            );
+        }
+    }
+
+    private record UrlCandidateContext(
+            Marketplace marketplace,
+            Category category,
+            Map<String, MarketplaceProduct> existingByExternalId,
+            MarketplaceCategoryFetchService.MarketplaceProductCandidate candidate,
+            String externalId,
+            boolean newCategory
+    ) {
     }
 
     private record MetadataCacheKey(Marketplace marketplace, String normalizedCategoryName) {

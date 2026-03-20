@@ -14,6 +14,7 @@ import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -37,11 +38,12 @@ import java.util.regex.Pattern;
 public class CrossPlatformProductMatcherService {
 
     private static final Locale TR = Locale.forLanguageTag("tr-TR");
+    private static final String PACKAGE_TOKEN = "paket";
     private static final Set<String> NAME_STOP_WORDS = Set.of(
-            "ve", "ile", "icin", "pet", "paket", "adet", "sise", "kutu", "boy", "mini", "maxi"
+            "ve", "ile", "icin", "pet", PACKAGE_TOKEN, "adet", "sise", "kutu", "boy", "mini", "maxi"
     );
     private static final Set<String> NLP_NOISE_TOKENS = Set.of(
-            "pet", "sise", "sisede", "siseli", "cam", "bardak", "kutu", "paket", "paketi", "adet",
+            "pet", "sise", "sisede", "siseli", "cam", "bardak", "kutu", PACKAGE_TOKEN, "paketi", "adet",
             "pratik", "prtc", "ekonomik", "firsat", "kampanya", "boy", "mini", "maxi"
     );
     private static final Map<String, String> NLP_LEMMA_MAP = Map.ofEntries(
@@ -60,7 +62,7 @@ public class CrossPlatformProductMatcherService {
     private static final Pattern COMBO_QUANTITY_PATTERN =
             Pattern.compile("(\\d+)\\s*[xX]\\s*(\\d+(?:[.,]\\d+)?)\\s*(kg|gr|g|ml|lt|l)\\b");
     private static final Pattern PACK_PATTERN =
-            Pattern.compile("(\\d+)\\s*(?:['’]?(?:li|lı|lu|lü)|pack|paket)\\b", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+            Pattern.compile("(\\d+)\\s*(?:['’]?(?:li|lı|lu|lü)|pack|" + PACKAGE_TOKEN + ")\\b", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
     private static final Pattern AMOUNT_PATTERN =
             Pattern.compile("(\\d+(?:[.,]\\d+)?)\\s*(kg|gr|g|ml|lt|l)\\b");
     private static final Pattern FAT_PERCENT_PATTERN =
@@ -99,51 +101,110 @@ public class CrossPlatformProductMatcherService {
         Map<String, ImageSignature> imageSignatureCache = new HashMap<>();
         Map<String, Integer> ysGroupCounts = countBrandQuantityGroups(ys);
         Map<String, Integer> mgGroupCounts = countBrandQuantityGroups(mg);
+        List<MarketplaceProductMatchPairResponse> candidates = collectCandidatePairs(
+                ys,
+                mg,
+                minScore,
+                imageSignatureCache,
+                ysGroupCounts,
+                mgGroupCounts
+        );
+        sortCandidates(candidates);
+        List<MarketplaceProductMatchPairResponse> selected = selectDistinctPairs(candidates);
+        return finalizeSelectedPairs(selected, candidates);
+    }
+
+    private List<MarketplaceProductMatchPairResponse> collectCandidatePairs(
+            List<MarketplaceProductCandidateResponse> ys,
+            List<MarketplaceProductCandidateResponse> mg,
+            double minScore,
+            Map<String, ImageSignature> imageSignatureCache,
+            Map<String, Integer> ysGroupCounts,
+            Map<String, Integer> mgGroupCounts
+    ) {
         List<MarketplaceProductMatchPairResponse> candidates = new ArrayList<>();
         for (MarketplaceProductCandidateResponse ysItem : ys) {
             String ysGroupKey = brandQuantityGroupKey(ysItem);
             for (MarketplaceProductCandidateResponse mgItem : mg) {
-                MarketplaceProductMatchScoreResponse score = scoreCandidatePair(
+                MarketplaceProductMatchPairResponse pair = toCandidatePair(
                         ysItem,
                         mgItem,
-                        imageSignatureCache
+                        minScore,
+                        ysGroupKey,
+                        imageSignatureCache,
+                        ysGroupCounts,
+                        mgGroupCounts
                 );
-                if (score == null || score.score() < minScore) {
-                    continue;
+                if (pair != null) {
+                    candidates.add(pair);
                 }
-                String mgGroupKey = brandQuantityGroupKey(mgItem);
-                boolean ambiguous = ysGroupCounts.getOrDefault(ysGroupKey, 0) > 1
-                        || mgGroupCounts.getOrDefault(mgGroupKey, 0) > 1;
-                if (ambiguous) {
-                    double imageScore = imageSimilarity(safe(ysItem.imageUrl()), safe(mgItem.imageUrl()), imageSignatureCache);
-                    boolean strongBrandMatch = brandSimilarity(inferBrand(ysItem), inferBrand(mgItem)) >= 0.92d;
-                    if (!strongBrandMatch && imageScore < AMBIGUOUS_IMAGE_MIN_SCORE) {
-                        continue;
-                    }
-                    score = new MarketplaceProductMatchScoreResponse(
-                            score.score(),
-                            score.nameScore(),
-                            score.coreNameScore(),
-                            score.phraseScore(),
-                            score.quantityScore(),
-                            score.brandScore(),
-                            Math.max(score.imageScore(), imageScore),
-                            score.priceScore(),
-                            score.profileScore()
-                    );
-                }
-                candidates.add(
-                        new MarketplaceProductMatchPairResponse(
-                                ysItem,
-                                mgItem,
-                                score,
-                                false,
-                                false
-                        )
-                );
             }
         }
+        return candidates;
+    }
 
+    private MarketplaceProductMatchPairResponse toCandidatePair(
+            MarketplaceProductCandidateResponse ysItem,
+            MarketplaceProductCandidateResponse mgItem,
+            double minScore,
+            String ysGroupKey,
+            Map<String, ImageSignature> imageSignatureCache,
+            Map<String, Integer> ysGroupCounts,
+            Map<String, Integer> mgGroupCounts
+    ) {
+        MarketplaceProductMatchScoreResponse score = scoreCandidatePair(ysItem, mgItem, imageSignatureCache);
+        if (score == null || score.score() < minScore) {
+            return null;
+        }
+        MarketplaceProductMatchScoreResponse resolvedScore = resolveAmbiguousScore(
+                ysItem,
+                mgItem,
+                score,
+                ysGroupKey,
+                imageSignatureCache,
+                ysGroupCounts,
+                mgGroupCounts
+        );
+        if (resolvedScore == null) {
+            return null;
+        }
+        return new MarketplaceProductMatchPairResponse(ysItem, mgItem, resolvedScore, false, false);
+    }
+
+    private MarketplaceProductMatchScoreResponse resolveAmbiguousScore(
+            MarketplaceProductCandidateResponse ysItem,
+            MarketplaceProductCandidateResponse mgItem,
+            MarketplaceProductMatchScoreResponse score,
+            String ysGroupKey,
+            Map<String, ImageSignature> imageSignatureCache,
+            Map<String, Integer> ysGroupCounts,
+            Map<String, Integer> mgGroupCounts
+    ) {
+        String mgGroupKey = brandQuantityGroupKey(mgItem);
+        boolean ambiguous = ysGroupCounts.getOrDefault(ysGroupKey, 0) > 1
+                || mgGroupCounts.getOrDefault(mgGroupKey, 0) > 1;
+        if (!ambiguous) {
+            return score;
+        }
+        double imageScore = imageSimilarity(safe(ysItem.imageUrl()), safe(mgItem.imageUrl()), imageSignatureCache);
+        boolean strongBrandMatch = brandSimilarity(inferBrand(ysItem), inferBrand(mgItem)) >= 0.92d;
+        if (!strongBrandMatch && imageScore < AMBIGUOUS_IMAGE_MIN_SCORE) {
+            return null;
+        }
+        return new MarketplaceProductMatchScoreResponse(
+                score.score(),
+                score.nameScore(),
+                score.coreNameScore(),
+                score.phraseScore(),
+                score.quantityScore(),
+                score.brandScore(),
+                Math.max(score.imageScore(), imageScore),
+                score.priceScore(),
+                score.profileScore()
+        );
+    }
+
+    private void sortCandidates(List<MarketplaceProductMatchPairResponse> candidates) {
         candidates.sort((left, right) -> {
             int byScore = Double.compare(right.score().score(), left.score().score());
             if (byScore != 0) {
@@ -165,7 +226,11 @@ public class CrossPlatformProductMatcherService {
             String rightKey = normalizeExternalId(right.ys().externalId()) + "|" + normalizeExternalId(right.mg().externalId());
             return leftKey.compareTo(rightKey);
         });
+    }
 
+    private List<MarketplaceProductMatchPairResponse> selectDistinctPairs(
+            List<MarketplaceProductMatchPairResponse> candidates
+    ) {
         Set<String> usedYs = new LinkedHashSet<>();
         Set<String> usedMg = new LinkedHashSet<>();
         List<MarketplaceProductMatchPairResponse> selected = new ArrayList<>();
@@ -179,13 +244,17 @@ public class CrossPlatformProductMatcherService {
             usedMg.add(mgKey);
             selected.add(pair);
         }
+        return selected;
+    }
+
+    private List<MarketplaceProductMatchPairResponse> finalizeSelectedPairs(
+            List<MarketplaceProductMatchPairResponse> selected,
+            List<MarketplaceProductMatchPairResponse> allCandidates
+    ) {
         List<MarketplaceProductMatchPairResponse> finalized = new ArrayList<>();
         for (MarketplaceProductMatchPairResponse pair : selected) {
-            double margin = computePairMargin(pair, candidates);
-            boolean autoLinkEligible = shouldAutoLinkCandidates(
-                    pair.score(),
-                    margin
-            );
+            double margin = computePairMargin(pair, allCandidates);
+            boolean autoLinkEligible = shouldAutoLinkCandidates(pair.score(), margin);
             finalized.add(new MarketplaceProductMatchPairResponse(
                     pair.ys(),
                     pair.mg(),
@@ -542,22 +611,7 @@ public class CrossPlatformProductMatcherService {
     }
 
     private Compatibility compareProfiles(MatchProfile left, MatchProfile right) {
-        if (left.goatMilk() != right.goatMilk()) {
-            return new Compatibility(false, 0d);
-        }
-        if (left.lactoseFree() != right.lactoseFree()) {
-            return new Compatibility(false, 0d);
-        }
-        if (left.organic() != right.organic()) {
-            return new Compatibility(false, 0d);
-        }
-        if (left.protein() != right.protein()) {
-            return new Compatibility(false, 0d);
-        }
-        if ((left.flavor() == null) != (right.flavor() == null)) {
-            return new Compatibility(false, 0d);
-        }
-        if (left.flavor() != null && !left.flavor().equals(right.flavor())) {
+        if (!sameProfileCoreFlags(left, right) || !sameFlavor(left, right)) {
             return new Compatibility(false, 0d);
         }
 
@@ -565,7 +619,25 @@ public class CrossPlatformProductMatcherService {
         if (!fat.compatible()) {
             return new Compatibility(false, 0d);
         }
+        double processScore = resolveProfileProcessScore(left, right);
+        return new Compatibility(true, (fat.score() * 0.65d) + (processScore * 0.35d));
+    }
 
+    private boolean sameProfileCoreFlags(MatchProfile left, MatchProfile right) {
+        return left.goatMilk() == right.goatMilk()
+                && left.lactoseFree() == right.lactoseFree()
+                && left.organic() == right.organic()
+                && left.protein() == right.protein();
+    }
+
+    private boolean sameFlavor(MatchProfile left, MatchProfile right) {
+        if ((left.flavor() == null) != (right.flavor() == null)) {
+            return false;
+        }
+        return left.flavor() == null || left.flavor().equals(right.flavor());
+    }
+
+    private double resolveProfileProcessScore(MatchProfile left, MatchProfile right) {
         double processScore = 0.6d;
         if (left.uht() && right.uht()) {
             processScore += 0.15d;
@@ -579,8 +651,7 @@ public class CrossPlatformProductMatcherService {
         if (left.bottle() && right.bottle()) {
             processScore += 0.1d;
         }
-        processScore = Math.min(processScore, 1d);
-        return new Compatibility(true, (fat.score() * 0.65d) + (processScore * 0.35d));
+        return Math.min(processScore, 1d);
     }
 
     private Compatibility compareFormConsistency(
@@ -703,7 +774,7 @@ public class CrossPlatformProductMatcherService {
         if (text.contains("kavanoz")) {
             return "JAR";
         }
-        if (text.contains("paket")) {
+        if (text.contains(PACKAGE_TOKEN)) {
             return "PACK";
         }
         return "";
@@ -894,7 +965,9 @@ public class CrossPlatformProductMatcherService {
                 BufferedImage image = ImageIO.read(new ByteArrayInputStream(response.body()));
                 signature = buildImageSignature(image);
             }
-        } catch (Exception ignored) {
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        } catch (IOException | RuntimeException ex) {
         }
         if (signature == null) {
             putUnavailableCaches(normalizedUrl, requestCache);
@@ -1152,7 +1225,7 @@ public class CrossPlatformProductMatcherService {
         String normalized = normalizePlainText(value)
                 .replaceAll("\\d+\\s*[xX]\\s*\\d+([.,]\\d+)?\\s*(g|gr|kg|ml|l|lt)\\b", " ")
                 .replaceAll("\\d+([.,]\\d+)?\\s*(g|gr|kg|ml|l|lt)\\b", " ")
-                .replaceAll("\\d+\\s*(li|lu|pack|paket|adet)\\b", " ")
+                .replaceAll("\\d+\\s*(li|lu|pack|" + PACKAGE_TOKEN + "|adet)\\b", " ")
                 .replaceAll("[^a-z0-9\\s]", " ")
                 .replaceAll("\\s+", " ")
                 .trim();
