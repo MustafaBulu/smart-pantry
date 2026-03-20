@@ -19,14 +19,11 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.io.IOException;
 import java.math.BigDecimal;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
@@ -210,7 +207,7 @@ class MigrosCategoryFetchServiceTest {
         assertEquals(2, result.get(1).candidate().packCount());
     }
 
-    private void stubResponses(Map<String, String> responsesByUrl) throws Exception {
+    private void stubResponses(Map<String, String> responsesByUrl) {
         when(httpClient.newCall(any(Request.class))).thenAnswer(invocation -> {
             Request request = invocation.getArgument(0);
             String body = responsesByUrl.get(request.url().toString());
@@ -223,7 +220,7 @@ class MigrosCategoryFetchServiceTest {
         });
     }
 
-    private void stubFailure(String url, int code) throws Exception {
+    private void stubFailure(String url, int code) {
         when(httpClient.newCall(any(Request.class))).thenAnswer(invocation -> {
             Request request = invocation.getArgument(0);
             if (!url.equals(request.url().toString())) {

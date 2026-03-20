@@ -144,7 +144,7 @@ class MigrosCatalogCategoryRangeImportServiceTest {
         assertEquals(0, result.uniqueProductCount());
     }
 
-    private void stubResponses(Map<String, String> responsesByUrl) throws Exception {
+    private void stubResponses(Map<String, String> responsesByUrl) {
         when(httpClient.newCall(any(Request.class))).thenAnswer(invocation -> {
             Request request = invocation.getArgument(0);
             String body = responsesByUrl.get(request.url().toString());

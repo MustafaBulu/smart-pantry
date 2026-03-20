@@ -762,20 +762,15 @@ public class CategoryService {
     private String stripQuantityTokens(String value) {
         StringBuilder builder = new StringBuilder();
         String[] tokens = value.split("\\s+");
-        for (int i = 0; i < tokens.length; i++) {
-            String current = tokens[i];
-            String next = i + 1 < tokens.length ? tokens[i + 1] : "";
-            if (isCombinedQuantityToken(current)) {
+        int index = 0;
+        while (index < tokens.length) {
+            int span = quantityTokenSpan(tokens, index);
+            if (span == 0) {
+                appendToken(builder, tokens[index]);
+                index++;
                 continue;
             }
-            if (isQuantityNumberToken(current) && isQuantityUnitToken(next)) {
-                i++;
-                continue;
-            }
-            if (builder.length() > 0) {
-                builder.append(' ');
-            }
-            builder.append(current);
+            index += span;
         }
         return builder.toString();
     }
@@ -783,26 +778,49 @@ public class CategoryService {
     private String stripPackSignatureTokens(String value) {
         StringBuilder builder = new StringBuilder();
         String[] tokens = value.replace('’', ' ').replace('\'', ' ').split("\\s+");
-        for (int i = 0; i < tokens.length; i++) {
-            String current = tokens[i];
-            String next = i + 1 < tokens.length ? tokens[i + 1] : "";
-            if (isCombinedPackSignatureToken(current)) {
+        int index = 0;
+        while (index < tokens.length) {
+            int span = packSignatureTokenSpan(tokens, index);
+            if (span == 0) {
+                appendToken(builder, tokens[index]);
+                index++;
                 continue;
             }
-            if (isPositiveIntegerToken(current) && isPackSignatureToken(next, i + 2 < tokens.length ? tokens[i + 2] : "")) {
-                if (("li".equals(next) || "lu".equals(next)) && "paket".equals(i + 2 < tokens.length ? tokens[i + 2] : "")) {
-                    i += 2;
-                } else {
-                    i++;
-                }
-                continue;
-            }
-            if (builder.length() > 0) {
-                builder.append(' ');
-            }
-            builder.append(current);
+            index += span;
         }
         return builder.toString();
+    }
+
+    private int quantityTokenSpan(String[] tokens, int index) {
+        String current = tokens[index];
+        if (isCombinedQuantityToken(current)) {
+            return 1;
+        }
+        String next = index + 1 < tokens.length ? tokens[index + 1] : "";
+        return isQuantityNumberToken(current) && isQuantityUnitToken(next) ? 2 : 0;
+    }
+
+    private int packSignatureTokenSpan(String[] tokens, int index) {
+        String current = tokens[index];
+        if (isCombinedPackSignatureToken(current)) {
+            return 1;
+        }
+        if (!isPositiveIntegerToken(current)) {
+            return 0;
+        }
+        String next = index + 1 < tokens.length ? tokens[index + 1] : "";
+        String trailing = index + 2 < tokens.length ? tokens[index + 2] : "";
+        if (!isPackSignatureToken(next, trailing)) {
+            return 0;
+        }
+        return ("li".equals(next) || "lu".equals(next)) && "paket".equals(trailing) ? 3 : 2;
+    }
+
+    private void appendToken(StringBuilder builder, String token) {
+        if (!builder.isEmpty()) {
+            builder.append(' ');
+        }
+        builder.append(token);
     }
 
     private boolean isQuantityNumberToken(String token) {

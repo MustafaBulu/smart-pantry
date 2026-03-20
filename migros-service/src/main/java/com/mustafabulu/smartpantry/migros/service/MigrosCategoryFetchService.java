@@ -608,53 +608,13 @@ public class MigrosCategoryFetchService implements MarketplaceCategoryFetchServi
                 return compact;
             }
         }
-        int length = text.length();
-        for (int index = 0; index < length; index++) {
-            if (!Character.isDigit(text.charAt(index))) {
-                continue;
-            }
-            int packStart = index;
-            while (index < length && Character.isDigit(text.charAt(index))) {
-                index++;
-            }
-            Integer packCount = parsePositiveInt(text.substring(packStart, index));
-            if (packCount == null) {
-                continue;
-            }
-            int current = skipWhitespace(text, index);
-            if (current >= length || Character.toLowerCase(text.charAt(current)) != 'x') {
-                index -= 1;
-                continue;
-            }
-            current = skipWhitespace(text, current + 1);
-            int amountStart = current;
-            boolean hasDecimal = false;
-            while (current < length) {
-                char currentChar = text.charAt(current);
-                if (Character.isDigit(currentChar)) {
-                    current++;
-                    continue;
-                }
-                if (!hasDecimal && (currentChar == '.' || currentChar == ',')) {
-                    hasDecimal = true;
-                    current++;
-                    continue;
-                }
-                break;
-            }
-            if (!isDecimalToken(text.substring(amountStart, current))) {
-                index -= 1;
-                continue;
-            }
-            int unitStart = skipWhitespace(text, current);
-            int unitEnd = unitStart;
-            while (unitEnd < length && Character.isLetter(text.charAt(unitEnd))) {
-                unitEnd++;
-            }
-            if (unitEnd > unitStart && isUnitToken(text.substring(unitStart, unitEnd))) {
+        int index = findNextDigit(text, 0);
+        while (index >= 0) {
+            Integer packCount = parseSpacedComboPackCount(text, index);
+            if (packCount != null) {
                 return packCount;
             }
-            index -= 1;
+            index = findNextDigit(text, index + 1);
         }
         return null;
     }
@@ -666,33 +626,102 @@ public class MigrosCategoryFetchService implements MarketplaceCategoryFetchServi
                 return compact;
             }
         }
-        int length = text.length();
-        for (int index = 0; index < length; index++) {
-            if (!Character.isDigit(text.charAt(index))) {
-                continue;
-            }
-            int digitStart = index;
-            while (index < length && Character.isDigit(text.charAt(index))) {
-                index++;
-            }
-            Integer packCount = parsePositiveInt(text.substring(digitStart, index));
-            if (packCount == null) {
-                continue;
-            }
-            int suffixStart = skipWhitespace(text, index);
-            if (suffixStart < length && (text.charAt(suffixStart) == '\'' || text.charAt(suffixStart) == '’')) {
-                suffixStart++;
-            }
-            int suffixEnd = suffixStart;
-            while (suffixEnd < length && Character.isLetter(text.charAt(suffixEnd))) {
-                suffixEnd++;
-            }
-            if (suffixEnd > suffixStart && isPackDescriptor(text.substring(suffixStart, suffixEnd))) {
+        int index = findNextDigit(text, 0);
+        while (index >= 0) {
+            Integer packCount = parseSpacedListedPackCount(text, index);
+            if (packCount != null) {
                 return packCount;
             }
-            index -= 1;
+            index = findNextDigit(text, index + 1);
         }
         return null;
+    }
+
+    private Integer parseSpacedComboPackCount(String text, int startIndex) {
+        int length = text.length();
+        int current = startIndex;
+        while (current < length && Character.isDigit(text.charAt(current))) {
+            current++;
+        }
+        Integer packCount = parsePositiveInt(text.substring(startIndex, current));
+        if (packCount == null) {
+            return null;
+        }
+
+        int separatorIndex = skipWhitespace(text, current);
+        if (separatorIndex >= length || Character.toLowerCase(text.charAt(separatorIndex)) != 'x') {
+            return null;
+        }
+
+        int amountStart = skipWhitespace(text, separatorIndex + 1);
+        int amountEnd = readDecimalEnd(text, amountStart);
+        if (!isDecimalToken(text.substring(amountStart, amountEnd))) {
+            return null;
+        }
+
+        int unitStart = skipWhitespace(text, amountEnd);
+        int unitEnd = readLetterEnd(text, unitStart);
+        if (unitEnd <= unitStart) {
+            return null;
+        }
+        return isUnitToken(text.substring(unitStart, unitEnd)) ? packCount : null;
+    }
+
+    private Integer parseSpacedListedPackCount(String text, int startIndex) {
+        int length = text.length();
+        int current = startIndex;
+        while (current < length && Character.isDigit(text.charAt(current))) {
+            current++;
+        }
+        Integer packCount = parsePositiveInt(text.substring(startIndex, current));
+        if (packCount == null) {
+            return null;
+        }
+
+        int suffixStart = skipWhitespace(text, current);
+        if (suffixStart < length && (text.charAt(suffixStart) == '\'' || text.charAt(suffixStart) == '’')) {
+            suffixStart++;
+        }
+        int suffixEnd = readLetterEnd(text, suffixStart);
+        if (suffixEnd <= suffixStart) {
+            return null;
+        }
+        return isPackDescriptor(text.substring(suffixStart, suffixEnd)) ? packCount : null;
+    }
+
+    private int findNextDigit(String text, int startIndex) {
+        int current = Math.max(0, startIndex);
+        while (current < text.length() && !Character.isDigit(text.charAt(current))) {
+            current++;
+        }
+        return current < text.length() ? current : -1;
+    }
+
+    private int readDecimalEnd(String text, int startIndex) {
+        int current = startIndex;
+        boolean hasDecimalSeparator = false;
+        while (current < text.length()) {
+            char currentChar = text.charAt(current);
+            if (Character.isDigit(currentChar)) {
+                current++;
+                continue;
+            }
+            if (!hasDecimalSeparator && (currentChar == '.' || currentChar == ',')) {
+                hasDecimalSeparator = true;
+                current++;
+                continue;
+            }
+            break;
+        }
+        return current;
+    }
+
+    private int readLetterEnd(String text, int startIndex) {
+        int current = startIndex;
+        while (current < text.length() && Character.isLetter(text.charAt(current))) {
+            current++;
+        }
+        return current;
     }
 
     private Integer parseCompactComboPackCount(String token) {

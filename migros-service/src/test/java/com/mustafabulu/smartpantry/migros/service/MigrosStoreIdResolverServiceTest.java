@@ -120,10 +120,11 @@ class MigrosStoreIdResolverServiceTest {
         );
         when(migrosCookieSessionService.resolveCookie("")).thenReturn("");
         when(migrosCookieSessionService.refreshFromSelenium()).thenThrow(new RuntimeException("selenium failed"));
+        MigrosStoreIdByLocationRequest request = new MigrosStoreIdByLocationRequest(41.0, 29.0);
 
         SPException exception = assertThrows(
                 SPException.class,
-                () -> serviceWithBlankCookie.resolveStoreId(new MigrosStoreIdByLocationRequest(41.0, 29.0))
+                () -> serviceWithBlankCookie.resolveStoreId(request)
         );
 
         assertEquals(HttpStatus.BAD_REQUEST, exception.getStatusCode());
@@ -146,10 +147,11 @@ class MigrosStoreIdResolverServiceTest {
                         .code(200)
                         .message("OK")
                         .build());
+        MigrosStoreIdByLocationRequest request = new MigrosStoreIdByLocationRequest(41.0, 29.0);
 
         SPException exception = assertThrows(
                 SPException.class,
-                () -> service.resolveStoreId(new MigrosStoreIdByLocationRequest(41.0, 29.0))
+                () -> service.resolveStoreId(request)
         );
 
         assertEquals(HttpStatus.BAD_GATEWAY, exception.getStatusCode());
@@ -164,10 +166,11 @@ class MigrosStoreIdResolverServiceTest {
                 .thenReturn(response(200, "{\"data\":{\"cartInfo\":{\"line\":{}}}}"))
                 .thenReturn(response(200, "{\"data\":{}}"))
                 .thenThrow(new IOException("locations down"));
+        MigrosStoreIdByLocationRequest request = new MigrosStoreIdByLocationRequest(41.0, 29.0);
 
         SPException exception = assertThrows(
                 SPException.class,
-                () -> service.resolveStoreId(new MigrosStoreIdByLocationRequest(41.0, 29.0))
+                () -> service.resolveStoreId(request)
         );
 
         assertEquals(HttpStatus.BAD_GATEWAY, exception.getStatusCode());

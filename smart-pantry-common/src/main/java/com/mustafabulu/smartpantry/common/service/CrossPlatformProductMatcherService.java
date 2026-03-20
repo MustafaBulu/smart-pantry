@@ -482,34 +482,22 @@ public class CrossPlatformProductMatcherService {
 
     private QuantityInfo parseQuantityInfo(String name) {
         String lower = safe(name).toLowerCase(TR);
-        for (int index = 0; index < lower.length(); index++) {
-            if (!Character.isDigit(lower.charAt(index))) {
-                continue;
-            }
+        int index = findNextDigitIndex(lower, 0);
+        while (index >= 0) {
             ParsedToken first = readNumericToken(lower, index);
-            if (first == null) {
+            if (first != null) {
+                QuantityInfo quantity = parsePackQuantity(lower, first);
+                if (quantity != null) {
+                    return quantity;
+                }
+                quantity = parseSingleQuantity(lower, first);
+                if (quantity != null) {
+                    return quantity;
+                }
+                index = findNextDigitIndex(lower, first.end());
                 continue;
             }
-            int current = skipMeasurementWhitespace(lower, first.end());
-            if (current < lower.length() && (lower.charAt(current) == 'x' || lower.charAt(current) == 'X')) {
-                ParsedToken second = readNumericToken(lower, skipMeasurementWhitespace(lower, current + 1));
-                if (second != null) {
-                    ParsedWord unitWord = readWordToken(lower, skipMeasurementWhitespace(lower, second.end()));
-                    if (unitWord != null && isMeasurementUnit(unitWord.value())) {
-                        Double parsedAmount = parseAmount(second.value(), unitWord.value());
-                        String unit = parseUnit(unitWord.value());
-                        Integer packCount = parseIntOrNull(first.value());
-                        return new QuantityInfo(parsedAmount, unit, packCount);
-                    }
-                }
-            }
-            ParsedWord unitWord = readWordToken(lower, current);
-            if (unitWord != null && isMeasurementUnit(unitWord.value())) {
-                Double amount = parseAmount(first.value(), unitWord.value());
-                String unit = parseUnit(unitWord.value());
-                return new QuantityInfo(amount, unit, extractPackCount(lower));
-            }
-            index = first.end() - 1;
+            index = findNextDigitIndex(lower, index + 1);
         }
         return new QuantityInfo(null, null, extractPackCount(lower));
     }
@@ -773,20 +761,19 @@ public class CrossPlatformProductMatcherService {
     }
 
     private Double parseFatPercent(String normalizedText) {
-        for (int index = 0; index < normalizedText.length(); index++) {
-            if (!Character.isDigit(normalizedText.charAt(index))) {
-                continue;
-            }
+        int index = findNextDigitIndex(normalizedText, 0);
+        while (index >= 0) {
             ParsedToken number = readNumericToken(normalizedText, index);
-            if (number == null) {
+            if (number != null) {
+                ParsedWord word = readWordToken(normalizedText, skipMeasurementWhitespace(normalizedText, number.end()));
+                if (word != null && "yag".equals(word.value())) {
+                    double parsed = parseDoubleOrNaN(number.value());
+                    return Double.isFinite(parsed) ? parsed : null;
+                }
+                index = findNextDigitIndex(normalizedText, number.end());
                 continue;
             }
-            ParsedWord word = readWordToken(normalizedText, skipMeasurementWhitespace(normalizedText, number.end()));
-            if (word != null && "yag".equals(word.value())) {
-                double parsed = parseDoubleOrNaN(number.value());
-                return Double.isFinite(parsed) ? parsed : null;
-            }
-            index = number.end() - 1;
+            index = findNextDigitIndex(normalizedText, index + 1);
         }
         return null;
     }
@@ -1255,37 +1242,25 @@ public class CrossPlatformProductMatcherService {
         StringBuilder cleaned = new StringBuilder(value.length());
         int index = 0;
         while (index < value.length()) {
-            char currentChar = value.charAt(index);
-            if (!Character.isDigit(currentChar)) {
-                cleaned.append(currentChar);
-                index++;
-                continue;
+            int digitIndex = findNextDigitIndex(value, index);
+            if (digitIndex < 0) {
+                cleaned.append(value, index, value.length());
+                break;
             }
-            ParsedToken first = readNumericToken(value, index);
-            if (first == null) {
-                cleaned.append(currentChar);
-                index++;
-                continue;
-            }
-            int current = skipMeasurementWhitespace(value, first.end());
-            if (current < value.length() && (value.charAt(current) == 'x' || value.charAt(current) == 'X')) {
-                ParsedToken second = readNumericToken(value, skipMeasurementWhitespace(value, current + 1));
-                if (second != null) {
-                    ParsedWord unitWord = readWordToken(value, skipMeasurementWhitespace(value, second.end()));
-                    if (unitWord != null && isMeasurementUnit(unitWord.value())) {
-                        cleaned.append(' ');
-                        index = unitWord.end();
-                        continue;
-                    }
-                }
-            }
-            ParsedWord unitWord = readWordToken(value, current);
-            if (unitWord != null && isMeasurementUnit(unitWord.value())) {
+            cleaned.append(value, index, digitIndex);
+            MeasurementSpan measurementSpan = findMeasurementSpan(value, digitIndex);
+            if (measurementSpan != null) {
                 cleaned.append(' ');
-                index = unitWord.end();
+                index = measurementSpan.end();
                 continue;
             }
-            cleaned.append(value, index, first.end());
+            ParsedToken first = readNumericToken(value, digitIndex);
+            if (first == null) {
+                cleaned.append(value.charAt(digitIndex));
+                index = digitIndex + 1;
+                continue;
+            }
+            cleaned.append(value, digitIndex, first.end());
             index = first.end();
         }
         return cleaned.toString();
@@ -1295,30 +1270,13 @@ public class CrossPlatformProductMatcherService {
         if (value == null || value.isBlank()) {
             return null;
         }
-        int length = value.length();
-        for (int index = 0; index < length; index++) {
-            if (!Character.isDigit(value.charAt(index))) {
-                continue;
+        int index = findNextDigitIndex(value, 0);
+        while (index >= 0) {
+            PackSuffixMatch match = readPackSuffixMatch(value, index);
+            if (match != null) {
+                return match.packCount();
             }
-            int digitStart = index;
-            while (index < length && Character.isDigit(value.charAt(index))) {
-                index++;
-            }
-            int digitEnd = index;
-            int suffixStart = skipPackDelimiters(value, index);
-            int suffixEnd = suffixStart;
-            while (suffixEnd < length && Character.isLetter(value.charAt(suffixEnd))) {
-                suffixEnd++;
-            }
-            if (suffixEnd == suffixStart) {
-                index = digitEnd - 1;
-                continue;
-            }
-            String suffix = value.substring(suffixStart, suffixEnd);
-            if (isPackSuffix(suffix) && isWordBoundary(value, suffixEnd)) {
-                return Integer.parseInt(value.substring(digitStart, digitEnd));
-            }
-            index = digitEnd - 1;
+            index = findNextDigitIndex(value, index + 1);
         }
         return null;
     }
@@ -1328,35 +1286,115 @@ public class CrossPlatformProductMatcherService {
             return "";
         }
         StringBuilder cleaned = new StringBuilder(value.length());
-        int length = value.length();
         int index = 0;
-        while (index < length) {
-            if (!Character.isDigit(value.charAt(index))) {
-                cleaned.append(value.charAt(index));
-                index++;
+        while (index < value.length()) {
+            int digitIndex = findNextDigitIndex(value, index);
+            if (digitIndex < 0) {
+                cleaned.append(value, index, value.length());
+                break;
+            }
+            cleaned.append(value, index, digitIndex);
+            SemanticPackSpan semanticPackSpan = readSemanticPackSpan(value, digitIndex);
+            if (semanticPackSpan != null) {
+                cleaned.append(' ');
+                index = semanticPackSpan.end();
                 continue;
             }
-            int digitStart = index;
-            while (index < length && Character.isDigit(value.charAt(index))) {
-                index++;
+            ParsedToken number = readNumericToken(value, digitIndex);
+            if (number == null) {
+                cleaned.append(value.charAt(digitIndex));
+                index = digitIndex + 1;
+                continue;
             }
-            int digitEnd = index;
-            int suffixStart = skipPackWhitespace(value, index);
-            int suffixEnd = suffixStart;
-            while (suffixEnd < length && Character.isLetter(value.charAt(suffixEnd))) {
-                suffixEnd++;
-            }
-            if (suffixEnd > suffixStart) {
-                String suffix = value.substring(suffixStart, suffixEnd);
-                if (isSemanticPackSuffix(suffix) && isWordBoundary(value, suffixEnd)) {
-                    cleaned.append(' ');
-                    index = suffixEnd;
-                    continue;
-                }
-            }
-            cleaned.append(value, digitStart, digitEnd);
+            cleaned.append(value, digitIndex, number.end());
+            index = number.end();
         }
         return cleaned.toString();
+    }
+
+    private QuantityInfo parsePackQuantity(String value, ParsedToken first) {
+        int current = skipMeasurementWhitespace(value, first.end());
+        if (current >= value.length() || (value.charAt(current) != 'x' && value.charAt(current) != 'X')) {
+            return null;
+        }
+        ParsedToken second = readNumericToken(value, skipMeasurementWhitespace(value, current + 1));
+        if (second == null) {
+            return null;
+        }
+        ParsedWord unitWord = readWordToken(value, skipMeasurementWhitespace(value, second.end()));
+        if (unitWord == null || !isMeasurementUnit(unitWord.value())) {
+            return null;
+        }
+        Double amount = parseAmount(second.value(), unitWord.value());
+        String unit = parseUnit(unitWord.value());
+        Integer packCount = parseIntOrNull(first.value());
+        return new QuantityInfo(amount, unit, packCount);
+    }
+
+    private QuantityInfo parseSingleQuantity(String value, ParsedToken first) {
+        ParsedWord unitWord = readWordToken(value, skipMeasurementWhitespace(value, first.end()));
+        if (unitWord == null || !isMeasurementUnit(unitWord.value())) {
+            return null;
+        }
+        Double amount = parseAmount(first.value(), unitWord.value());
+        String unit = parseUnit(unitWord.value());
+        return new QuantityInfo(amount, unit, extractPackCount(value));
+    }
+
+    private MeasurementSpan findMeasurementSpan(String value, int startIndex) {
+        ParsedToken first = readNumericToken(value, startIndex);
+        if (first == null) {
+            return null;
+        }
+        QuantityInfo packQuantity = parsePackQuantity(value, first);
+        if (packQuantity != null) {
+            int current = skipMeasurementWhitespace(value, first.end());
+            ParsedToken second = readNumericToken(value, skipMeasurementWhitespace(value, current + 1));
+            if (second == null) {
+                return null;
+            }
+            ParsedWord unitWord = readWordToken(value, skipMeasurementWhitespace(value, second.end()));
+            return unitWord == null ? null : new MeasurementSpan(unitWord.end());
+        }
+        ParsedWord unitWord = readWordToken(value, skipMeasurementWhitespace(value, first.end()));
+        if (unitWord != null && isMeasurementUnit(unitWord.value())) {
+            return new MeasurementSpan(unitWord.end());
+        }
+        return null;
+    }
+
+    private PackSuffixMatch readPackSuffixMatch(String value, int startIndex) {
+        ParsedToken number = readWholeNumberToken(value, startIndex);
+        if (number == null) {
+            return null;
+        }
+        int suffixStart = skipPackDelimiters(value, number.end());
+        int suffixEnd = readLetterSequenceEnd(value, suffixStart);
+        if (suffixEnd == suffixStart) {
+            return null;
+        }
+        String suffix = value.substring(suffixStart, suffixEnd);
+        if (!isPackSuffix(suffix) || !isWordBoundary(value, suffixEnd)) {
+            return null;
+        }
+        return new PackSuffixMatch(Integer.parseInt(number.value()), suffixEnd);
+    }
+
+    private SemanticPackSpan readSemanticPackSpan(String value, int startIndex) {
+        ParsedToken number = readWholeNumberToken(value, startIndex);
+        if (number == null) {
+            return null;
+        }
+        int suffixStart = skipPackWhitespace(value, number.end());
+        int suffixEnd = readLetterSequenceEnd(value, suffixStart);
+        if (suffixEnd <= suffixStart) {
+            return null;
+        }
+        String suffix = value.substring(suffixStart, suffixEnd);
+        if (isSemanticPackSuffix(suffix) && isWordBoundary(value, suffixEnd)) {
+            return new SemanticPackSpan(suffixEnd);
+        }
+        return null;
     }
 
     private int skipPackDelimiters(String value, int index) {
@@ -1383,6 +1421,33 @@ public class CrossPlatformProductMatcherService {
             case "li", "lı", "lu", "lü", "pack", PACKAGE_TOKEN -> true;
             default -> false;
         };
+    }
+
+    private int findNextDigitIndex(String value, int startIndex) {
+        int current = Math.max(0, startIndex);
+        while (current < value.length() && !Character.isDigit(value.charAt(current))) {
+            current++;
+        }
+        return current < value.length() ? current : -1;
+    }
+
+    private int readLetterSequenceEnd(String value, int startIndex) {
+        int current = startIndex;
+        while (current < value.length() && Character.isLetter(value.charAt(current))) {
+            current++;
+        }
+        return current;
+    }
+
+    private ParsedToken readWholeNumberToken(String value, int start) {
+        if (start >= value.length() || !Character.isDigit(value.charAt(start))) {
+            return null;
+        }
+        int end = start;
+        while (end < value.length() && Character.isDigit(value.charAt(end))) {
+            end++;
+        }
+        return new ParsedToken(value.substring(start, end), end);
     }
 
     private ParsedToken readNumericToken(String value, int start) {
@@ -1446,6 +1511,15 @@ public class CrossPlatformProductMatcherService {
     }
 
     private record ParsedWord(String value, int end) {
+    }
+
+    private record MeasurementSpan(int end) {
+    }
+
+    private record PackSuffixMatch(int packCount, int end) {
+    }
+
+    private record SemanticPackSpan(int end) {
     }
 
     private boolean isSemanticPackSuffix(String suffix) {
