@@ -8,7 +8,6 @@ import com.mustafabulu.smartpantry.common.service.MarketplaceCatalogUrlFetchServ
 import com.mustafabulu.smartpantry.common.service.MarketplaceCategorySeedService;
 import com.mustafabulu.smartpantry.common.service.MarketplaceCategoryFetchService;
 import com.mustafabulu.smartpantry.migros.constant.MigrosConstants;
-import com.mustafabulu.smartpantry.migros.model.MigrosCatalogProduct;
 import com.mustafabulu.smartpantry.migros.repository.MigrosCatalogProductRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -29,7 +28,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -42,6 +40,7 @@ import java.util.regex.Pattern;
 @Service
 @Slf4j
 @RequiredArgsConstructor
+@SuppressWarnings("java:S5854")
 @ConditionalOnProperty(prefix = "marketplace.mg", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class MigrosCategoryFetchService implements MarketplaceCategoryFetchService, MarketplaceCategorySeedService, MarketplaceCatalogUrlFetchService {
 
@@ -53,12 +52,8 @@ public class MigrosCategoryFetchService implements MarketplaceCategoryFetchServi
     private static final int MAX_DB_CANDIDATES = 500;
     private static final Pattern UNIT_PRICE_PATTERN =
             Pattern.compile("\\(([-0-9.,]+)\\s*TL\\s*/\\s*([A-Za-z]+)\\)");
-    private static final Pattern COMBO_PACK_PATTERN =
-            Pattern.compile("(\\d+)\\s*[xX]\\s*\\d+(?:[.,]\\d+)?\\s*(kg|gr|g|ml|lt|l)\\b");
     private static final Pattern QUANTITY_IN_NAME_PATTERN =
             Pattern.compile("(\\d+(?:[.,]\\d+)?)\\s*(kg|gr|g|ml|lt|l)\\b", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-    private static final Pattern LIST_PACK_PATTERN =
-            Pattern.compile("(\\d+)\\s*(?:['’]?(?:li|lı|lu|lü)|pack|paket)\\b", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     private final OkHttpClient httpClient;
     private final ObjectMapper objectMapper;
@@ -122,16 +117,15 @@ public class MigrosCategoryFetchService implements MarketplaceCategoryFetchServi
         Map<String, CatalogUrlProductCandidate> productsByExternalId = new LinkedHashMap<>();
         int page = 1;
         int pageCount = 1;
-        while (page <= pageCount && page <= MAX_SEARCH_PAGES) {
+        boolean shouldContinue = true;
+        while (shouldContinue && page <= pageCount && page <= MAX_SEARCH_PAGES) {
             PageFetchResult pageFetchResult = fetchCatalogUrlPage(sourceUrl, page, pageCount, productsByExternalId);
-            if (pageFetchResult == null) {
-                break;
+            shouldContinue = pageFetchResult != null;
+            if (shouldContinue) {
+                pageCount = pageFetchResult.nextPageCount();
+                shouldContinue = !pageFetchResult.shouldStop();
+                page += 1;
             }
-            pageCount = pageFetchResult.nextPageCount();
-            if (pageFetchResult.shouldStop()) {
-                break;
-            }
-            page += 1;
         }
         return new ArrayList<>(productsByExternalId.values());
     }
@@ -209,18 +203,16 @@ public class MigrosCategoryFetchService implements MarketplaceCategoryFetchServi
         Map<String, QuantityInfo> quantityByExternalId = new HashMap<>();
         for (JsonNode entry : entries) {
             String externalId = entry.path("id").asText("").trim();
-            if (externalId.isBlank()) {
-                continue;
+            if (!externalId.isBlank()) {
+                String categoryName = extractCategoryName(entry);
+                MarketplaceProductCandidate candidate = toCandidate(entry, quantityByExternalId);
+                if (candidate != null) {
+                    productsByExternalId.putIfAbsent(
+                            externalId.toLowerCase(),
+                            new CatalogUrlProductCandidate(categoryName, candidate)
+                    );
+                }
             }
-            String categoryName = extractCategoryName(entry);
-            MarketplaceProductCandidate candidate = toCandidate(entry, categoryName, quantityByExternalId);
-            if (candidate == null) {
-                continue;
-            }
-            productsByExternalId.putIfAbsent(
-                    externalId.toLowerCase(),
-                    new CatalogUrlProductCandidate(categoryName, candidate)
-            );
         }
         return entries.size();
     }
@@ -232,6 +224,9 @@ public class MigrosCategoryFetchService implements MarketplaceCategoryFetchServi
             return List.of();
         }
         String keyword = categoryName.trim();
+        if (normalizeSearchText(keyword).isBlank()) {
+            return List.of();
+        }
         String encoded = URLEncoder.encode(keyword, StandardCharsets.UTF_8);
         Request request = new Request.Builder()
                 .url(SEARCH_URL.formatted(encoded))
@@ -248,7 +243,7 @@ public class MigrosCategoryFetchService implements MarketplaceCategoryFetchServi
             Map<String, QuantityInfo> quantityByExternalId = new HashMap<>();
             if (entries.isArray()) {
                 entries.forEach(entry -> {
-                    MarketplaceProductCandidate candidate = toCandidate(entry, keyword, quantityByExternalId);
+                    MarketplaceProductCandidate candidate = toCandidate(entry, quantityByExternalId);
                     if (candidate != null) {
                         candidates.add(candidate);
                     }
@@ -265,207 +260,6 @@ public class MigrosCategoryFetchService implements MarketplaceCategoryFetchServi
         } catch (IOException ex) {
             return List.of();
         }
-    }
-
-    private MarketplaceProductCandidate toCandidateFromCatalogRow(MigrosCatalogProduct row) {
-        if (row == null || row.getExternalId() == null || row.getExternalId().isBlank()) {
-            return null;
-        }
-        String productName = row.getProductName() == null ? "" : row.getProductName().trim();
-        if (productName.isBlank()) {
-            return null;
-        }
-        QuantityInfo quantityInfo = parseQuantityInfoFromCatalogRow(row);
-        return new MarketplaceProductCandidate(
-                Marketplace.MG,
-                row.getExternalId().trim(),
-                productName,
-                resolveCatalogBrand(row),
-                row.getImageUrl(),
-                row.getRegularPrice(),
-                row.getShownPrice(),
-                null,
-                null,
-                null,
-                null,
-                null,
-                quantityInfo.unit(),
-                quantityInfo.amount() == null ? null : (int) Math.round(quantityInfo.amount()),
-                quantityInfo.packCount()
-        );
-    }
-
-    private QuantityInfo parseQuantityInfoFromCatalogRow(MigrosCatalogProduct row) {
-        String productName = row.getProductName() == null ? "" : row.getProductName();
-        Integer packCount = parsePackCountFromName(productName);
-
-        QuantityInfo fromName = parseQuantityFromName(productName);
-        if (fromName.amount() != null && fromName.unit() != null) {
-            return new QuantityInfo(fromName.amount(), fromName.unit(), packCount);
-        }
-        return parseQuantityFromCatalogUnitPrice(row, packCount);
-    }
-
-    private QuantityInfo parseQuantityFromCatalogUnitPrice(MigrosCatalogProduct row, Integer packCount) {
-        String unitPriceText = row.getUnitPrice();
-        if (unitPriceText == null || unitPriceText.isBlank()) {
-            return new QuantityInfo(null, null, packCount);
-        }
-        Matcher matcher = UNIT_PRICE_PATTERN.matcher(unitPriceText);
-        if (!matcher.find()) {
-            return new QuantityInfo(null, null, packCount);
-        }
-        Double unitRate = parseLocalizedDecimal(matcher.group(1));
-        String rawPerUnit = matcher.group(2);
-        String normalizedUnit = normalizeUnit(rawPerUnit);
-        if (unitRate == null || unitRate <= 0d || normalizedUnit == null) {
-            return new QuantityInfo(null, null, packCount);
-        }
-        BigDecimal referencePrice = row.getShownPrice() != null && row.getShownPrice().compareTo(BigDecimal.ZERO) > 0
-                ? row.getShownPrice()
-                : row.getRegularPrice();
-        if (referencePrice == null || referencePrice.compareTo(BigDecimal.ZERO) <= 0) {
-            return new QuantityInfo(null, null, packCount);
-        }
-        double multiplier = ("kg".equalsIgnoreCase(rawPerUnit) || "l".equalsIgnoreCase(rawPerUnit))
-                ? 1000d
-                : 1d;
-        double resolved = (referencePrice.doubleValue() / unitRate) * multiplier;
-        if (!Double.isFinite(resolved) || resolved <= 0d) {
-            return new QuantityInfo(null, null, packCount);
-        }
-        return new QuantityInfo(resolved, normalizedUnit, packCount);
-    }
-
-    private QuantityInfo parseQuantityFromName(String productName) {
-        if (productName == null || productName.isBlank()) {
-            return new QuantityInfo(null, null, null);
-        }
-        Matcher matcher = QUANTITY_IN_NAME_PATTERN.matcher(productName.toLowerCase());
-        Double amount = null;
-        String unit = null;
-        while (matcher.find()) {
-            Double parsed = parseLocalizedDecimal(matcher.group(1));
-            String normalized = normalizeUnit(matcher.group(2));
-            if (parsed == null || normalized == null) {
-                continue;
-            }
-            if ("g".equals(normalized) && "kg".equalsIgnoreCase(matcher.group(2))) {
-                parsed = parsed * 1000d;
-            } else if ("ml".equals(normalized)
-                    && ("l".equalsIgnoreCase(matcher.group(2)) || "lt".equalsIgnoreCase(matcher.group(2)))) {
-                parsed = parsed * 1000d;
-            }
-            amount = parsed;
-            unit = normalized;
-        }
-        return new QuantityInfo(amount, unit, null);
-    }
-
-    private String inferBrandFromName(String productName) {
-        if (productName == null || productName.isBlank()) {
-            return "";
-        }
-        String[] tokens = productName.trim().split("\\s+");
-        if (tokens.length == 0) {
-            return "";
-        }
-        String token = tokens[0].replaceAll("[^\\p{L}\\p{N}]", "");
-        return token == null ? "" : token.trim();
-    }
-
-    private String resolveCatalogBrand(MigrosCatalogProduct row) {
-        if (row == null) {
-            return "";
-        }
-        String stored = row.getBrandName();
-        if (stored != null && !stored.isBlank()) {
-            return stored.trim();
-        }
-        return inferBrandFromName(row.getProductName());
-    }
-
-    private List<String> tokenizeForSearch(String keyword) {
-        if (keyword == null || keyword.isBlank()) {
-            return List.of();
-        }
-        String normalized = normalizeSearchText(keyword);
-        if (normalized.isBlank()) {
-            return List.of();
-        }
-        List<String> tokens = new ArrayList<>();
-        for (String part : normalized.split(" ")) {
-            String token = part.trim();
-            if (token.length() >= 2) {
-                tokens.add(token);
-            }
-        }
-        return tokens;
-    }
-
-    private boolean matchesSearchTokens(MigrosCatalogProduct row, List<String> queryTokens) {
-        if (row == null) {
-            return false;
-        }
-        if (queryTokens == null || queryTokens.isEmpty()) {
-            return true;
-        }
-        Set<String> productWords = tokenizeToWordSet(row.getProductName());
-        Set<String> brandWords = tokenizeToWordSet(row.getBrandName());
-        if (productWords.isEmpty() && brandWords.isEmpty()) {
-            return false;
-        }
-        for (String token : queryTokens) {
-            boolean matched = startsWithAnyWord(productWords, token) || startsWithAnyWord(brandWords, token);
-            if (!matched) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private int scoreSearchMatch(MigrosCatalogProduct row, List<String> queryTokens) {
-        if (row == null || queryTokens == null || queryTokens.isEmpty()) {
-            return 0;
-        }
-        Set<String> productWords = tokenizeToWordSet(row.getProductName());
-        Set<String> brandWords = tokenizeToWordSet(row.getBrandName());
-        int score = 0;
-        for (String token : queryTokens) {
-            if (startsWithAnyWord(productWords, token)) {
-                score += 3;
-            } else if (startsWithAnyWord(brandWords, token)) {
-                score += 2;
-            }
-        }
-        return score;
-    }
-
-    private Set<String> tokenizeToWordSet(String text) {
-        String normalized = normalizeSearchText(text);
-        if (normalized.isBlank()) {
-            return Set.of();
-        }
-        Set<String> words = new HashSet<>();
-        for (String part : normalized.split(" ")) {
-            String word = part.trim();
-            if (word.length() >= 2) {
-                words.add(word);
-            }
-        }
-        return words;
-    }
-
-    private boolean startsWithAnyWord(Set<String> words, String token) {
-        if (words == null || words.isEmpty() || token == null || token.isBlank()) {
-            return false;
-        }
-        for (String word : words) {
-            if (word.startsWith(token)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private String normalizeSearchText(String text) {
@@ -561,7 +355,6 @@ public class MigrosCategoryFetchService implements MarketplaceCategoryFetchServi
 
     private MarketplaceProductCandidate toCandidate(
             JsonNode entry,
-            String categoryName,
             Map<String, QuantityInfo> quantityByExternalId
     ) {
         String externalId = entry.path("id").asText("");
@@ -800,21 +593,186 @@ public class MigrosCategoryFetchService implements MarketplaceCategoryFetchServi
             return null;
         }
         String lower = name.toLowerCase();
-        Matcher combo = COMBO_PACK_PATTERN.matcher(lower);
-        if (combo.find()) {
-            Integer parsed = parsePositiveInt(combo.group(1));
-            if (parsed != null && parsed > 1) {
-                return parsed;
+        Integer comboPackCount = extractComboPackCount(lower);
+        if (comboPackCount != null && comboPackCount > 1) {
+            return comboPackCount;
+        }
+        Integer listedPackCount = extractListedPackCount(lower);
+        return listedPackCount != null && listedPackCount > 1 ? listedPackCount : null;
+    }
+
+    private Integer extractComboPackCount(String text) {
+        for (String token : text.split("\\s+")) {
+            Integer compact = parseCompactComboPackCount(token);
+            if (compact != null) {
+                return compact;
             }
         }
-        Matcher listed = LIST_PACK_PATTERN.matcher(lower);
-        if (listed.find()) {
-            Integer parsed = parsePositiveInt(listed.group(1));
-            if (parsed != null && parsed > 1) {
-                return parsed;
+        int length = text.length();
+        for (int index = 0; index < length; index++) {
+            if (!Character.isDigit(text.charAt(index))) {
+                continue;
+            }
+            int packStart = index;
+            while (index < length && Character.isDigit(text.charAt(index))) {
+                index++;
+            }
+            Integer packCount = parsePositiveInt(text.substring(packStart, index));
+            if (packCount == null) {
+                continue;
+            }
+            int current = skipWhitespace(text, index);
+            if (current >= length || Character.toLowerCase(text.charAt(current)) != 'x') {
+                index -= 1;
+                continue;
+            }
+            current = skipWhitespace(text, current + 1);
+            int amountStart = current;
+            boolean hasDecimal = false;
+            while (current < length) {
+                char currentChar = text.charAt(current);
+                if (Character.isDigit(currentChar)) {
+                    current++;
+                    continue;
+                }
+                if (!hasDecimal && (currentChar == '.' || currentChar == ',')) {
+                    hasDecimal = true;
+                    current++;
+                    continue;
+                }
+                break;
+            }
+            if (!isDecimalToken(text.substring(amountStart, current))) {
+                index -= 1;
+                continue;
+            }
+            int unitStart = skipWhitespace(text, current);
+            int unitEnd = unitStart;
+            while (unitEnd < length && Character.isLetter(text.charAt(unitEnd))) {
+                unitEnd++;
+            }
+            if (unitEnd > unitStart && isUnitToken(text.substring(unitStart, unitEnd))) {
+                return packCount;
+            }
+            index -= 1;
+        }
+        return null;
+    }
+
+    private Integer extractListedPackCount(String text) {
+        for (String token : text.split("\\s+")) {
+            Integer compact = parseCompactListedPackCount(token);
+            if (compact != null) {
+                return compact;
+            }
+        }
+        int length = text.length();
+        for (int index = 0; index < length; index++) {
+            if (!Character.isDigit(text.charAt(index))) {
+                continue;
+            }
+            int digitStart = index;
+            while (index < length && Character.isDigit(text.charAt(index))) {
+                index++;
+            }
+            Integer packCount = parsePositiveInt(text.substring(digitStart, index));
+            if (packCount == null) {
+                continue;
+            }
+            int suffixStart = skipWhitespace(text, index);
+            if (suffixStart < length && (text.charAt(suffixStart) == '\'' || text.charAt(suffixStart) == '’')) {
+                suffixStart++;
+            }
+            int suffixEnd = suffixStart;
+            while (suffixEnd < length && Character.isLetter(text.charAt(suffixEnd))) {
+                suffixEnd++;
+            }
+            if (suffixEnd > suffixStart && isPackDescriptor(text.substring(suffixStart, suffixEnd))) {
+                return packCount;
+            }
+            index -= 1;
+        }
+        return null;
+    }
+
+    private Integer parseCompactComboPackCount(String token) {
+        int separatorIndex = token.toLowerCase(Locale.ROOT).indexOf('x');
+        if (separatorIndex <= 0 || separatorIndex >= token.length() - 2) {
+            return null;
+        }
+        String packPart = token.substring(0, separatorIndex);
+        if (!isPositiveIntegerToken(packPart)) {
+            return null;
+        }
+        int unitStart = separatorIndex + 1;
+        boolean hasDecimal = false;
+        while (unitStart < token.length()) {
+            char current = token.charAt(unitStart);
+            if (Character.isDigit(current)) {
+                unitStart++;
+                continue;
+            }
+            if (!hasDecimal && (current == '.' || current == ',')) {
+                hasDecimal = true;
+                unitStart++;
+                continue;
+            }
+            break;
+        }
+        if (unitStart >= token.length()) {
+            return null;
+        }
+        if (!isDecimalToken(token.substring(separatorIndex + 1, unitStart))) {
+            return null;
+        }
+        return isUnitToken(token.substring(unitStart)) ? parsePositiveInt(packPart) : null;
+    }
+
+    private Integer parseCompactListedPackCount(String token) {
+        String normalized = token.replace("’", "").replace("'", "");
+        for (String suffix : List.of("pack", "paket", "li", "lı", "lu", "lü")) {
+            if (!normalized.toLowerCase(Locale.ROOT).endsWith(suffix)) {
+                continue;
+            }
+            String packPart = normalized.substring(0, normalized.length() - suffix.length());
+            if (isPositiveIntegerToken(packPart)) {
+                return parsePositiveInt(packPart);
             }
         }
         return null;
+    }
+
+    private int skipWhitespace(String text, int index) {
+        int current = index;
+        while (current < text.length() && Character.isWhitespace(text.charAt(current))) {
+            current++;
+        }
+        return current;
+    }
+
+    private boolean isPositiveIntegerToken(String token) {
+        return parsePositiveInt(token) != null;
+    }
+
+    private boolean isDecimalToken(String token) {
+        return parseLocalizedDecimal(token) != null;
+    }
+
+    private boolean isUnitToken(String token) {
+        return switch (token.toLowerCase(Locale.ROOT)) {
+            case "kg", "gr", "g", "ml", "lt", "l" -> true;
+            default -> false;
+        };
+    }
+
+    private boolean isPackDescriptor(String token) {
+        String normalized = token.toLowerCase(Locale.ROOT);
+        return normalized.equals("pack")
+                || normalized.equals("paket")
+                || normalized.equals("li")
+                || normalized.equals("lı")
+                || normalized.equals("lu")
+                || normalized.equals("lü");
     }
 
     private Integer parsePositiveInt(String raw) {

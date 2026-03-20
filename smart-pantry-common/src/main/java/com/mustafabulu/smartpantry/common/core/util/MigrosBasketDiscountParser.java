@@ -1,15 +1,8 @@
 package com.mustafabulu.smartpantry.common.core.util;
 
 import java.math.BigDecimal;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public final class MigrosBasketDiscountParser {
-
-    private static final Pattern BASKET_DISCOUNT_PATTERN = Pattern.compile(
-            "(\\d+[.,]?\\d*)\\s*TL\\s*Sepette\\s*(\\d+[.,]?\\d*)\\s*TL",
-            Pattern.CASE_INSENSITIVE
-    );
 
     private MigrosBasketDiscountParser() {
     }
@@ -18,16 +11,53 @@ public final class MigrosBasketDiscountParser {
         if (tagText == null || tagText.isBlank()) {
             return null;
         }
-        Matcher matcher = BASKET_DISCOUNT_PATTERN.matcher(tagText);
-        if (!matcher.find()) {
+        String lower = tagText.toLowerCase();
+        int sepetteIndex = lower.indexOf("sepette");
+        if (sepetteIndex < 0) {
             return null;
         }
-        BigDecimal threshold = parseDecimal(matcher.group(1));
-        BigDecimal discountedPrice = parseDecimal(matcher.group(2));
+        BigDecimal threshold = findLastDecimalBeforeTl(lower, sepetteIndex);
+        BigDecimal discountedPrice = findFirstDecimalBeforeTl(lower, sepetteIndex + "sepette".length());
         if (threshold == null || discountedPrice == null) {
             return null;
         }
         return new BasketDiscount(threshold, discountedPrice);
+    }
+
+    private static BigDecimal findLastDecimalBeforeTl(String text, int endExclusive) {
+        int tlIndex = text.lastIndexOf("tl", endExclusive);
+        if (tlIndex < 0) {
+            return null;
+        }
+        return parseDecimal(scanNumberBackward(text, tlIndex - 1));
+    }
+
+    private static BigDecimal findFirstDecimalBeforeTl(String text, int startInclusive) {
+        int tlIndex = text.indexOf("tl", startInclusive);
+        if (tlIndex < 0) {
+            return null;
+        }
+        return parseDecimal(scanNumberBackward(text, tlIndex - 1));
+    }
+
+    private static String scanNumberBackward(String text, int startIndex) {
+        int end = startIndex;
+        while (end >= 0 && Character.isWhitespace(text.charAt(end))) {
+            end--;
+        }
+        if (end < 0) {
+            return "";
+        }
+        int start = end;
+        while (start >= 0) {
+            char current = text.charAt(start);
+            if (Character.isDigit(current) || current == '.' || current == ',') {
+                start--;
+                continue;
+            }
+            break;
+        }
+        return text.substring(start + 1, end + 1);
     }
 
     private static BigDecimal parseDecimal(String raw) {

@@ -226,7 +226,7 @@ public class CategoryService {
         if (!Double.isFinite(threshold)) {
             threshold = 0.76d;
         }
-        threshold = Math.max(0d, Math.min(1d, threshold));
+        threshold = Math.clamp(threshold, 0d, 1d);
         List<MarketplaceProductCandidateResponse> safeYs = ys == null ? List.of() : ys;
         List<MarketplaceProductCandidateResponse> safeMg = mg == null ? List.of() : mg;
         List<MarketplaceProductMatchPairResponse> autoPairs =
@@ -751,14 +751,122 @@ public class CategoryService {
         String lower = productName.toLowerCase(Locale.forLanguageTag("tr-TR"));
         String withoutDiacritics = Normalizer.normalize(lower, Normalizer.Form.NFD)
                 .replaceAll("\\p{M}+", "");
-        return withoutDiacritics
-                .replaceAll("\\d+[.,]?\\d*\\s*(g|gr|kg|ml|l|lt)\\b", " ")
-                .replaceAll("\\d+\\s*['’]?(li|lu|lu paket|li paket)\\b", " ")
+        return stripQuantityTokens(stripPackSignatureTokens(withoutDiacritics))
                 .replaceAll("\\bpaket\\b", " ")
                 .replaceAll("\\badet\\b", " ")
                 .replaceAll("[^a-z0-9]+", " ")
                 .trim()
                 .replaceAll("\\s+", " ");
+    }
+
+    private String stripQuantityTokens(String value) {
+        StringBuilder builder = new StringBuilder();
+        String[] tokens = value.split("\\s+");
+        for (int i = 0; i < tokens.length; i++) {
+            String current = tokens[i];
+            String next = i + 1 < tokens.length ? tokens[i + 1] : "";
+            if (isCombinedQuantityToken(current)) {
+                continue;
+            }
+            if (isQuantityNumberToken(current) && isQuantityUnitToken(next)) {
+                i++;
+                continue;
+            }
+            if (builder.length() > 0) {
+                builder.append(' ');
+            }
+            builder.append(current);
+        }
+        return builder.toString();
+    }
+
+    private String stripPackSignatureTokens(String value) {
+        StringBuilder builder = new StringBuilder();
+        String[] tokens = value.replace('’', ' ').replace('\'', ' ').split("\\s+");
+        for (int i = 0; i < tokens.length; i++) {
+            String current = tokens[i];
+            String next = i + 1 < tokens.length ? tokens[i + 1] : "";
+            if (isCombinedPackSignatureToken(current)) {
+                continue;
+            }
+            if (isPositiveIntegerToken(current) && isPackSignatureToken(next, i + 2 < tokens.length ? tokens[i + 2] : "")) {
+                if (("li".equals(next) || "lu".equals(next)) && "paket".equals(i + 2 < tokens.length ? tokens[i + 2] : "")) {
+                    i += 2;
+                } else {
+                    i++;
+                }
+                continue;
+            }
+            if (builder.length() > 0) {
+                builder.append(' ');
+            }
+            builder.append(current);
+        }
+        return builder.toString();
+    }
+
+    private boolean isQuantityNumberToken(String token) {
+        if (isBlank(token)) {
+            return false;
+        }
+        try {
+            Double.parseDouble(token.replace(',', '.'));
+            return true;
+        } catch (NumberFormatException ex) {
+            return false;
+        }
+    }
+
+    private boolean isQuantityUnitToken(String token) {
+        return switch (token) {
+            case "g", "gr", "kg", "ml", "l", "lt" -> true;
+            default -> false;
+        };
+    }
+
+    private boolean isCombinedQuantityToken(String token) {
+        if (isBlank(token) || token.length() < 2) {
+            return false;
+        }
+        for (String unit : List.of("kg", "gr", "ml", "lt", "g", "l")) {
+            if (!token.endsWith(unit)) {
+                continue;
+            }
+            String numericPart = token.substring(0, token.length() - unit.length());
+            return isQuantityNumberToken(numericPart);
+        }
+        return false;
+    }
+
+    private boolean isPositiveIntegerToken(String token) {
+        if (isBlank(token)) {
+            return false;
+        }
+        for (int i = 0; i < token.length(); i++) {
+            if (!Character.isDigit(token.charAt(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean isPackSignatureToken(String current, String next) {
+        return "li".equals(current)
+                || "lu".equals(current)
+                || (("li".equals(current) || "lu".equals(current)) && "paket".equals(next));
+    }
+
+    private boolean isCombinedPackSignatureToken(String token) {
+        if (isBlank(token) || token.length() < 3) {
+            return false;
+        }
+        for (String suffix : List.of("li", "lu")) {
+            if (!token.endsWith(suffix)) {
+                continue;
+            }
+            return isPositiveIntegerToken(token.substring(0, token.length() - suffix.length()));
+        }
+        return false;
     }
 
     private boolean shouldUseCandidateFallback(

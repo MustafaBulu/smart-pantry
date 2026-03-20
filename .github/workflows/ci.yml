@@ -6,12 +6,11 @@ on:
   pull_request:
     branches: [ main, master ]
 
-permissions:
-  contents: read
-
 jobs:
   backend:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - name: Set up JDK 21
@@ -27,6 +26,8 @@ jobs:
 
   frontend:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: frontend
@@ -39,7 +40,7 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Install
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Lint
         run: npm run lint
       - name: Typecheck
@@ -50,6 +51,8 @@ jobs:
   sonarcloud:
     name: SonarCloud
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     needs: [backend, frontend]
     env:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

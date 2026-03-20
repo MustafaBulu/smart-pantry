@@ -31,8 +31,6 @@ import java.util.Set;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 @Service
 public class CrossPlatformProductMatcherService {
@@ -59,14 +57,6 @@ public class CrossPlatformProductMatcherService {
             Map.entry("sisesi", "sise"),
             Map.entry("pratiksise", "sise")
     );
-    private static final Pattern COMBO_QUANTITY_PATTERN =
-            Pattern.compile("(\\d+)\\s*[xX]\\s*(\\d+(?:[.,]\\d+)?)\\s*(kg|gr|g|ml|lt|l)\\b");
-    private static final Pattern PACK_PATTERN =
-            Pattern.compile("(\\d+)\\s*(?:['’]?(?:li|lı|lu|lü)|pack|" + PACKAGE_TOKEN + ")\\b", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-    private static final Pattern AMOUNT_PATTERN =
-            Pattern.compile("(\\d+(?:[.,]\\d+)?)\\s*(kg|gr|g|ml|lt|l)\\b");
-    private static final Pattern FAT_PERCENT_PATTERN =
-            Pattern.compile("%?\\s*(\\d+(?:[.,]\\d+)?)\\s*yag");
     private static final int NLP_TOKEN_CACHE_MAX_SIZE = 20_000;
     private static final Map<String, String> NLP_TOKEN_CACHE = new ConcurrentHashMap<>();
     private static final Duration IMAGE_CONNECT_TIMEOUT = Duration.ofMillis(700);
@@ -364,7 +354,7 @@ public class CrossPlatformProductMatcherService {
                 + (pack.score() * 0.04d)
                 + (price.score() * 0.03d)
                 + (imageScore * 0.03d);
-        score = Math.max(0d, Math.min(1d, score));
+        score = Math.clamp(score, 0d, 1d);
 
         return new MarketplaceProductMatchScoreResponse(
                 score,
@@ -388,15 +378,13 @@ public class CrossPlatformProductMatcherService {
         String mgId = normalizeExternalId(selectedPair.mg().externalId());
         double nextBest = 0d;
         for (MarketplaceProductMatchPairResponse candidate : candidates) {
-            if (candidate == selectedPair) {
-                continue;
+            if (candidate != selectedPair) {
+                String candidateYsId = normalizeExternalId(candidate.ys().externalId());
+                String candidateMgId = normalizeExternalId(candidate.mg().externalId());
+                if (candidateYsId.equals(ysId) || candidateMgId.equals(mgId)) {
+                    nextBest = Math.max(nextBest, candidate.score().score());
+                }
             }
-            String candidateYsId = normalizeExternalId(candidate.ys().externalId());
-            String candidateMgId = normalizeExternalId(candidate.mg().externalId());
-            if (!candidateYsId.equals(ysId) && !candidateMgId.equals(mgId)) {
-                continue;
-            }
-            nextBest = Math.max(nextBest, candidate.score().score());
         }
         return Math.max(0d, selectedScore - nextBest);
     }
@@ -412,16 +400,11 @@ public class CrossPlatformProductMatcherService {
         Set<String> brandTokens = tokenSet(inferBrand(candidate));
         List<String> filtered = new ArrayList<>();
         for (String token : nameTokens) {
-            if (brandTokens.contains(token)) {
-                continue;
+            if (!brandTokens.contains(token)
+                    && !NAME_STOP_WORDS.contains(token)
+                    && token.length() > 2) {
+                filtered.add(token);
             }
-            if (NAME_STOP_WORDS.contains(token)) {
-                continue;
-            }
-            if (token.length() <= 2) {
-                continue;
-            }
-            filtered.add(token);
         }
         if (filtered.isEmpty()) {
             return String.join(" ", nameTokens);
@@ -499,27 +482,36 @@ public class CrossPlatformProductMatcherService {
 
     private QuantityInfo parseQuantityInfo(String name) {
         String lower = safe(name).toLowerCase(TR);
-        Matcher comboMatch = COMBO_QUANTITY_PATTERN.matcher(lower);
-        if (comboMatch.find()) {
-            Double parsedAmount = parseAmount(comboMatch.group(2), comboMatch.group(3));
-            String unit = parseUnit(comboMatch.group(3));
-            Integer packCount = Integer.parseInt(comboMatch.group(1));
-            return new QuantityInfo(parsedAmount, unit, packCount);
+        for (int index = 0; index < lower.length(); index++) {
+            if (!Character.isDigit(lower.charAt(index))) {
+                continue;
+            }
+            ParsedToken first = readNumericToken(lower, index);
+            if (first == null) {
+                continue;
+            }
+            int current = skipMeasurementWhitespace(lower, first.end());
+            if (current < lower.length() && (lower.charAt(current) == 'x' || lower.charAt(current) == 'X')) {
+                ParsedToken second = readNumericToken(lower, skipMeasurementWhitespace(lower, current + 1));
+                if (second != null) {
+                    ParsedWord unitWord = readWordToken(lower, skipMeasurementWhitespace(lower, second.end()));
+                    if (unitWord != null && isMeasurementUnit(unitWord.value())) {
+                        Double parsedAmount = parseAmount(second.value(), unitWord.value());
+                        String unit = parseUnit(unitWord.value());
+                        Integer packCount = parseIntOrNull(first.value());
+                        return new QuantityInfo(parsedAmount, unit, packCount);
+                    }
+                }
+            }
+            ParsedWord unitWord = readWordToken(lower, current);
+            if (unitWord != null && isMeasurementUnit(unitWord.value())) {
+                Double amount = parseAmount(first.value(), unitWord.value());
+                String unit = parseUnit(unitWord.value());
+                return new QuantityInfo(amount, unit, extractPackCount(lower));
+            }
+            index = first.end() - 1;
         }
-
-        Double amount = null;
-        String unit = null;
-        Matcher amountMatch = AMOUNT_PATTERN.matcher(lower);
-        if (amountMatch.find()) {
-            amount = parseAmount(amountMatch.group(1), amountMatch.group(2));
-            unit = parseUnit(amountMatch.group(2));
-        }
-        Integer packCount = null;
-        Matcher packMatch = PACK_PATTERN.matcher(lower);
-        if (packMatch.find()) {
-            packCount = Integer.parseInt(packMatch.group(1));
-        }
-        return new QuantityInfo(amount, unit, packCount);
+        return new QuantityInfo(null, null, extractPackCount(lower));
     }
 
     private Double parseAmount(String rawAmount, String rawUnit) {
@@ -781,12 +773,22 @@ public class CrossPlatformProductMatcherService {
     }
 
     private Double parseFatPercent(String normalizedText) {
-        Matcher matcher = FAT_PERCENT_PATTERN.matcher(normalizedText);
-        if (!matcher.find()) {
-            return null;
+        for (int index = 0; index < normalizedText.length(); index++) {
+            if (!Character.isDigit(normalizedText.charAt(index))) {
+                continue;
+            }
+            ParsedToken number = readNumericToken(normalizedText, index);
+            if (number == null) {
+                continue;
+            }
+            ParsedWord word = readWordToken(normalizedText, skipMeasurementWhitespace(normalizedText, number.end()));
+            if (word != null && "yag".equals(word.value())) {
+                double parsed = parseDoubleOrNaN(number.value());
+                return Double.isFinite(parsed) ? parsed : null;
+            }
+            index = number.end() - 1;
         }
-        double parsed = parseDoubleOrNaN(matcher.group(1));
-        return Double.isFinite(parsed) ? parsed : null;
+        return null;
     }
 
     private double leadingPhraseScore(String leftName, String rightName) {
@@ -968,6 +970,7 @@ public class CrossPlatformProductMatcherService {
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
         } catch (IOException | RuntimeException ex) {
+            // Image retrieval is best-effort; matching continues without image signal.
         }
         if (signature == null) {
             putUnavailableCaches(normalizedUrl, requestCache);
@@ -1145,7 +1148,7 @@ public class CrossPlatformProductMatcherService {
     private double hashSimilarity(long left, long right) {
         long diff = left ^ right;
         int distance = Long.bitCount(diff);
-        return 1d - ((double) distance / 64d);
+        return 1d - (distance / 64d);
     }
 
     private Set<String> splitTokenSet(String value) {
@@ -1223,9 +1226,8 @@ public class CrossPlatformProductMatcherService {
 
     private List<String> semanticTokens(String value) {
         String normalized = normalizePlainText(value)
-                .replaceAll("\\d+\\s*[xX]\\s*\\d+([.,]\\d+)?\\s*(g|gr|kg|ml|l|lt)\\b", " ")
-                .replaceAll("\\d+([.,]\\d+)?\\s*(g|gr|kg|ml|l|lt)\\b", " ")
-                .replaceAll("\\d+\\s*(li|lu|pack|" + PACKAGE_TOKEN + "|adet)\\b", " ")
+                .transform(this::stripMeasurementTokens)
+                .transform(this::stripPackTokens)
                 .replaceAll("[^a-z0-9\\s]", " ")
                 .replaceAll("\\s+", " ")
                 .trim();
@@ -1235,20 +1237,226 @@ public class CrossPlatformProductMatcherService {
         List<String> result = new ArrayList<>();
         for (String rawToken : tokenizeWithNlp(normalized)) {
             String token = normalizeMatchText(rawToken);
-            if (token.isBlank()) {
-                continue;
+            if (!token.isBlank()) {
+                token = NLP_LEMMA_MAP.getOrDefault(token, token);
+                token = stemToken(token);
+                if (!NLP_NOISE_TOKENS.contains(token) && token.length() > 1) {
+                    result.add(token);
+                }
             }
-            token = NLP_LEMMA_MAP.getOrDefault(token, token);
-            token = stemToken(token);
-            if (NLP_NOISE_TOKENS.contains(token)) {
-                continue;
-            }
-            if (token.length() <= 1) {
-                continue;
-            }
-            result.add(token);
         }
         return result;
+    }
+
+    private String stripMeasurementTokens(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        StringBuilder cleaned = new StringBuilder(value.length());
+        int index = 0;
+        while (index < value.length()) {
+            char currentChar = value.charAt(index);
+            if (!Character.isDigit(currentChar)) {
+                cleaned.append(currentChar);
+                index++;
+                continue;
+            }
+            ParsedToken first = readNumericToken(value, index);
+            if (first == null) {
+                cleaned.append(currentChar);
+                index++;
+                continue;
+            }
+            int current = skipMeasurementWhitespace(value, first.end());
+            if (current < value.length() && (value.charAt(current) == 'x' || value.charAt(current) == 'X')) {
+                ParsedToken second = readNumericToken(value, skipMeasurementWhitespace(value, current + 1));
+                if (second != null) {
+                    ParsedWord unitWord = readWordToken(value, skipMeasurementWhitespace(value, second.end()));
+                    if (unitWord != null && isMeasurementUnit(unitWord.value())) {
+                        cleaned.append(' ');
+                        index = unitWord.end();
+                        continue;
+                    }
+                }
+            }
+            ParsedWord unitWord = readWordToken(value, current);
+            if (unitWord != null && isMeasurementUnit(unitWord.value())) {
+                cleaned.append(' ');
+                index = unitWord.end();
+                continue;
+            }
+            cleaned.append(value, index, first.end());
+            index = first.end();
+        }
+        return cleaned.toString();
+    }
+
+    private Integer extractPackCount(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        int length = value.length();
+        for (int index = 0; index < length; index++) {
+            if (!Character.isDigit(value.charAt(index))) {
+                continue;
+            }
+            int digitStart = index;
+            while (index < length && Character.isDigit(value.charAt(index))) {
+                index++;
+            }
+            int digitEnd = index;
+            int suffixStart = skipPackDelimiters(value, index);
+            int suffixEnd = suffixStart;
+            while (suffixEnd < length && Character.isLetter(value.charAt(suffixEnd))) {
+                suffixEnd++;
+            }
+            if (suffixEnd == suffixStart) {
+                index = digitEnd - 1;
+                continue;
+            }
+            String suffix = value.substring(suffixStart, suffixEnd);
+            if (isPackSuffix(suffix) && isWordBoundary(value, suffixEnd)) {
+                return Integer.parseInt(value.substring(digitStart, digitEnd));
+            }
+            index = digitEnd - 1;
+        }
+        return null;
+    }
+
+    private String stripPackTokens(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        StringBuilder cleaned = new StringBuilder(value.length());
+        int length = value.length();
+        int index = 0;
+        while (index < length) {
+            if (!Character.isDigit(value.charAt(index))) {
+                cleaned.append(value.charAt(index));
+                index++;
+                continue;
+            }
+            int digitStart = index;
+            while (index < length && Character.isDigit(value.charAt(index))) {
+                index++;
+            }
+            int digitEnd = index;
+            int suffixStart = skipPackWhitespace(value, index);
+            int suffixEnd = suffixStart;
+            while (suffixEnd < length && Character.isLetter(value.charAt(suffixEnd))) {
+                suffixEnd++;
+            }
+            if (suffixEnd > suffixStart) {
+                String suffix = value.substring(suffixStart, suffixEnd);
+                if (isSemanticPackSuffix(suffix) && isWordBoundary(value, suffixEnd)) {
+                    cleaned.append(' ');
+                    index = suffixEnd;
+                    continue;
+                }
+            }
+            cleaned.append(value, digitStart, digitEnd);
+        }
+        return cleaned.toString();
+    }
+
+    private int skipPackDelimiters(String value, int index) {
+        int current = skipPackWhitespace(value, index);
+        if (current < value.length()) {
+            char currentChar = value.charAt(current);
+            if (currentChar == '\'' || currentChar == '’') {
+                current++;
+            }
+        }
+        return current;
+    }
+
+    private int skipPackWhitespace(String value, int index) {
+        int current = index;
+        while (current < value.length() && Character.isWhitespace(value.charAt(current))) {
+            current++;
+        }
+        return current;
+    }
+
+    private boolean isPackSuffix(String suffix) {
+        return switch (suffix) {
+            case "li", "lı", "lu", "lü", "pack", PACKAGE_TOKEN -> true;
+            default -> false;
+        };
+    }
+
+    private ParsedToken readNumericToken(String value, int start) {
+        if (start >= value.length() || !Character.isDigit(value.charAt(start))) {
+            return null;
+        }
+        int end = start;
+        boolean seenSeparator = false;
+        while (end < value.length()) {
+            char current = value.charAt(end);
+            if (Character.isDigit(current)) {
+                end++;
+                continue;
+            }
+            if (!seenSeparator && (current == '.' || current == ',')) {
+                seenSeparator = true;
+                end++;
+                continue;
+            }
+            break;
+        }
+        return new ParsedToken(value.substring(start, end), end);
+    }
+
+    private ParsedWord readWordToken(String value, int start) {
+        int current = skipMeasurementWhitespace(value, start);
+        if (current >= value.length() || !Character.isLetter(value.charAt(current))) {
+            return null;
+        }
+        int end = current;
+        while (end < value.length() && Character.isLetter(value.charAt(end))) {
+            end++;
+        }
+        return new ParsedWord(value.substring(current, end), end);
+    }
+
+    private int skipMeasurementWhitespace(String value, int index) {
+        int current = index;
+        while (current < value.length() && Character.isWhitespace(value.charAt(current))) {
+            current++;
+        }
+        return current;
+    }
+
+    private boolean isMeasurementUnit(String unit) {
+        return switch (unit) {
+            case "kg", "gr", "g", "ml", "lt", "l" -> true;
+            default -> false;
+        };
+    }
+
+    private Integer parseIntOrNull(String value) {
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    private record ParsedToken(String value, int end) {
+    }
+
+    private record ParsedWord(String value, int end) {
+    }
+
+    private boolean isSemanticPackSuffix(String suffix) {
+        return switch (suffix) {
+            case "li", "lı", "lu", "lü", "pack", PACKAGE_TOKEN, "adet" -> true;
+            default -> false;
+        };
+    }
+
+    private boolean isWordBoundary(String value, int index) {
+        return index >= value.length() || !Character.isLetterOrDigit(value.charAt(index));
     }
 
     private List<String> tokenizeWithNlp(String value) {
@@ -1277,7 +1485,7 @@ public class CrossPlatformProductMatcherService {
                 }
             }
         } catch (RuntimeException ignored) {
-            resolved = token;
+            // NLP stemming is best-effort; keep original token when stemmer fails.
         }
 
         if (NLP_TOKEN_CACHE.size() > NLP_TOKEN_CACHE_MAX_SIZE) {

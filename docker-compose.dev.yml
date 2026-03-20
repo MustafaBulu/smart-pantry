@@ -8,7 +8,6 @@ services:
     ports:
       - "8761:8761"
     volumes:
-      - ./:/app
       - maven_cache_dev:/root/.m2
 
   db:
@@ -65,7 +64,6 @@ services:
     ports:
       - "8081:8081"
     volumes:
-      - ./:/app
       - maven_cache_dev:/root/.m2
 
   yemeksepeti-service:
@@ -104,19 +102,18 @@ services:
     ports:
       - "8082:8082"
     volumes:
-      - ./:/app
       - maven_cache_dev:/root/.m2
 
   api-gateway:
-    image: nginx:1.27-alpine
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway.dev
     container_name: smart-pantry-api-gateway-dev
     depends_on:
       migros-service:
         condition: service_healthy
       yemeksepeti-service:
         condition: service_healthy
-    volumes:
-      - ./scripts/gateway/nginx.microservices.conf:/etc/nginx/conf.d/default.conf:ro
     ports:
       - "8080:8080"
 
@@ -132,11 +129,7 @@ services:
       - api-gateway
     ports:
       - "3000:3000"
-    volumes:
-      - ./frontend:/app
-      - frontend_node_modules_dev:/app/node_modules
 
 volumes:
   postgres_data_dev:
   maven_cache_dev:
-  frontend_node_modules_dev:

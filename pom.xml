@@ -26,6 +26,9 @@
 
     <properties>
         <java.version>21</java.version>
+        <archunit.version>1.4.1</archunit.version>
+        <jacoco.version>0.8.12</jacoco.version>
+        <sonar.coverage.jacoco.xmlReportPaths>${maven.multiModuleProjectDirectory}/smart-pantry-common/target/site/jacoco/jacoco.xml,${maven.multiModuleProjectDirectory}/migros-service/target/site/jacoco/jacoco.xml,${maven.multiModuleProjectDirectory}/yemeksepeti-service/target/site/jacoco/jacoco.xml,${maven.multiModuleProjectDirectory}/discovery-server/target/site/jacoco/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
         <spring-cloud.version>2024.0.2</spring-cloud.version>
     </properties>
 
@@ -40,4 +43,29 @@
             </dependency>
         </dependencies>
     </dependencyManagement>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco.version}</version>
+                <executions>
+                    <execution>
+                        <id>jacoco-prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>jacoco-report</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
 </project>

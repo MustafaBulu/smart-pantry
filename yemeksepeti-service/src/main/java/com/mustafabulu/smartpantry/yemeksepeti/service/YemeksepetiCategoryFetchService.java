@@ -24,8 +24,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Locale;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 @Service
 @Slf4j
@@ -62,10 +60,6 @@ public class YemeksepetiCategoryFetchService implements MarketplaceCategoryFetch
             "coca cola",
             "nuhun ankara",
             "kinder bueno"
-    );
-    private static final Pattern EXPLICIT_MULTIPLIER_PATTERN = Pattern.compile(
-            "(\\d+)\\s*x|x\\s*(\\d+)|(\\d+)\\s*(li|lu)\\b",
-            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE | Pattern.CANON_EQ
     );
     private static final String SEARCH_QUERY = """
             fragment ProductFields on Product {
@@ -119,10 +113,22 @@ public class YemeksepetiCategoryFetchService implements MarketplaceCategoryFetch
             }
             """;
 
-    private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(15))
-            .build();
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final HttpClient httpClient;
+    private final ObjectMapper objectMapper;
+
+    public YemeksepetiCategoryFetchService() {
+        this(
+                HttpClient.newBuilder()
+                        .connectTimeout(Duration.ofSeconds(15))
+                        .build(),
+                new ObjectMapper()
+        );
+    }
+
+    YemeksepetiCategoryFetchService(HttpClient httpClient, ObjectMapper objectMapper) {
+        this.httpClient = httpClient;
+        this.objectMapper = objectMapper;
+    }
 
     @Override
     public Marketplace marketplace() {
@@ -138,15 +144,16 @@ public class YemeksepetiCategoryFetchService implements MarketplaceCategoryFetch
         String trimmed = categoryName.trim();
         Map<String, MarketplaceProductCandidate> candidates = new LinkedHashMap<>();
         int offset = 0;
+        boolean shouldContinue = true;
         for (int page = 0; page < MAX_PAGES; page += 1) {
+            if (!shouldContinue) {
+                break;
+            }
             PageCollectResult result = collectSearchPage(trimmed, offset, candidates);
-            if (result == null) {
-                break;
+            shouldContinue = result != null && !result.shouldStop();
+            if (shouldContinue) {
+                offset += LIMIT;
             }
-            if (result.shouldStop()) {
-                break;
-            }
-            offset += LIMIT;
         }
         List<MarketplaceProductCandidate> result = new ArrayList<>(candidates.values());
         long durationMs = (System.nanoTime() - startedAt) / 1_000_000;
@@ -353,21 +360,11 @@ public class YemeksepetiCategoryFetchService implements MarketplaceCategoryFetch
     }
 
     private int resolveBundleMultiplier(String normalizedName) {
-        Matcher matcher = EXPLICIT_MULTIPLIER_PATTERN.matcher(normalizedName);
-        if (matcher.find()) {
-            for (int i = 1; i <= 3; i++) {
-                String group = matcher.group(i);
-                if (group == null || group.isBlank()) {
-                    continue;
-                }
-                try {
-                    int parsed = Integer.parseInt(group);
-                    if (parsed > 1 && parsed < 10) {
-                        return parsed;
-                    }
-                } catch (NumberFormatException ignored) {
-                    // Continue with fallback multiplier.
-                }
+        String[] tokens = normalizedName.split("\\s+");
+        for (int i = 0; i < tokens.length; i++) {
+            int parsed = parseBundleCount(tokens, i);
+            if (parsed > 1 && parsed < 10) {
+                return parsed;
             }
         }
         // YS "Bundle" products are usually sold as 2-pack.
@@ -493,11 +490,85 @@ public class YemeksepetiCategoryFetchService implements MarketplaceCategoryFetch
         if (token == null || token.isBlank()) {
             return false;
         }
-        return token.matches("\\d+") ||
-                token.matches("\\d+x") ||
-                token.matches("x\\d+") ||
-                token.matches("\\d+li") ||
-                token.matches("\\d+lu");
+        return isAllDigits(token)
+                || parseCompactXMultiplier(token) > 1
+                || hasNumericPrefix(token, "x")
+                || hasNumericSuffix(token, "x")
+                || hasNumericSuffix(token, "li")
+                || hasNumericSuffix(token, "lu");
+    }
+
+    private int parseBundleCount(String[] tokens, int index) {
+        String token = tokens[index];
+        int compactMultiplier = parseCompactXMultiplier(token);
+        if (compactMultiplier > 1) {
+            return compactMultiplier;
+        }
+        if (hasNumericPrefix(token, "x")) {
+            return parseBoundedInt(token.substring(0, token.length() - 1));
+        }
+        if (hasNumericSuffix(token, "x")) {
+            return parseBoundedInt(token.substring(1));
+        }
+        if (hasNumericSuffix(token, "li") || hasNumericSuffix(token, "lu")) {
+            return parseBoundedInt(token.substring(0, token.length() - 2));
+        }
+        if (isAllDigits(token) && index + 1 < tokens.length) {
+            String next = tokens[index + 1];
+            if ("x".equals(next) || "li".equals(next) || "lu".equals(next)) {
+                return parseBoundedInt(token);
+            }
+        }
+        return 1;
+    }
+
+    private int parseCompactXMultiplier(String token) {
+        int separatorIndex = token.toLowerCase(Locale.ROOT).indexOf('x');
+        if (separatorIndex <= 0 || separatorIndex >= token.length() - 1) {
+            return 1;
+        }
+        String left = token.substring(0, separatorIndex);
+        String right = token.substring(separatorIndex + 1);
+        if (!isAllDigits(left) || right.isBlank()) {
+            return 1;
+        }
+        char firstRight = right.charAt(0);
+        if (!Character.isDigit(firstRight)) {
+            return 1;
+        }
+        return parseBoundedInt(left);
+    }
+
+    private boolean isAllDigits(String token) {
+        if (token == null || token.isEmpty()) {
+            return false;
+        }
+        for (int i = 0; i < token.length(); i++) {
+            if (!Character.isDigit(token.charAt(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean hasNumericPrefix(String token, String suffix) {
+        return token.length() > suffix.length()
+                && token.endsWith(suffix)
+                && isAllDigits(token.substring(0, token.length() - suffix.length()));
+    }
+
+    private boolean hasNumericSuffix(String token, String prefix) {
+        return token.length() > prefix.length()
+                && token.startsWith(prefix)
+                && isAllDigits(token.substring(prefix.length()));
+    }
+
+    private int parseBoundedInt(String token) {
+        try {
+            return Integer.parseInt(token);
+        } catch (NumberFormatException ignored) {
+            return 1;
+        }
     }
 
     private String cleanToken(String raw) {

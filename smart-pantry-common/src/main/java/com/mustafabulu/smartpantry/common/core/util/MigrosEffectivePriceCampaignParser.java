@@ -2,23 +2,8 @@ package com.mustafabulu.smartpantry.common.core.util;
 
 import java.text.Normalizer;
 import java.util.Locale;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public final class MigrosEffectivePriceCampaignParser {
-
-    private static final Pattern BUY_PAY_PATTERN = Pattern.compile(
-            "(\\d+)\\s*al\\s*(\\d+)\\s*ode",
-            Pattern.CASE_INSENSITIVE
-    );
-    private static final Pattern PAY_REFUND_PATTERN = Pattern.compile(
-            "(\\d+)\\s*ode\\s*(\\d+)\\s*'?i?(?:\\s*money\\s*(?:hediye|iade)|\\s*iade)",
-            Pattern.CASE_INSENSITIVE
-    );
-    private static final Pattern NTH_ITEM_PERCENT_DISCOUNT_PATTERN = Pattern.compile(
-            "(\\d+)\\s*[.']?\\s*(?:si\\s*)?(?:urunde\\s*)?(?:%|yuzde)\\s*(\\d{1,2})\\s*indirim(?:li)?",
-            Pattern.CASE_INSENSITIVE
-    );
 
     private MigrosEffectivePriceCampaignParser() {
     }
@@ -40,38 +25,43 @@ public final class MigrosEffectivePriceCampaignParser {
     }
 
     private static EffectivePriceCampaign parseBuyPay(String tagText) {
-        Matcher matcher = BUY_PAY_PATTERN.matcher(tagText);
-        if (!matcher.find()) {
+        Integer buyQuantity = firstPositiveIntBefore(tagText, "al");
+        Integer payQuantity = firstPositiveIntAfter(tagText, "al", "ode");
+        if (buyQuantity == null || payQuantity == null) {
             return null;
         }
-        Integer buyQuantity = parsePositiveInt(matcher.group(1));
-        Integer payQuantity = parsePositiveInt(matcher.group(2));
-        if (buyQuantity == null || payQuantity == null || payQuantity > buyQuantity) {
+        if (payQuantity > buyQuantity) {
             return null;
         }
         return new EffectivePriceCampaign(buyQuantity, payQuantity);
     }
 
     private static EffectivePriceCampaign parsePayRefund(String tagText) {
-        Matcher matcher = PAY_REFUND_PATTERN.matcher(tagText);
-        if (!matcher.find()) {
+        Integer buyQuantity = firstPositiveIntBefore(tagText, "ode");
+        Integer refundQuantity = firstPositiveIntAfter(tagText, "ode", "iade");
+        if (refundQuantity == null && tagText.contains("money")) {
+            refundQuantity = firstPositiveIntAfter(tagText, "ode", "money");
+        }
+        if (buyQuantity == null || refundQuantity == null) {
             return null;
         }
-        Integer buyQuantity = parsePositiveInt(matcher.group(1));
-        Integer refundQuantity = parsePositiveInt(matcher.group(2));
-        if (buyQuantity == null || refundQuantity == null || refundQuantity >= buyQuantity) {
+        if (refundQuantity >= buyQuantity) {
             return null;
         }
         return new EffectivePriceCampaign(buyQuantity, buyQuantity - refundQuantity);
     }
 
     private static EffectivePriceCampaign parseNthItemPercentDiscount(String tagText) {
-        Matcher matcher = NTH_ITEM_PERCENT_DISCOUNT_PATTERN.matcher(tagText);
-        if (!matcher.find()) {
+        int percentMarker = tagText.indexOf('%');
+        if (percentMarker < 0) {
+            percentMarker = tagText.indexOf("yuzde");
+        }
+        int discountIndex = tagText.indexOf("indirim");
+        if (percentMarker < 0 || discountIndex < 0 || percentMarker > discountIndex) {
             return null;
         }
-        Integer nthItem = parsePositiveInt(matcher.group(1));
-        Integer discountPercent = parsePositiveInt(matcher.group(2));
+        Integer nthItem = firstPositiveIntBefore(tagText, percentMarker);
+        Integer discountPercent = firstPositiveIntBetween(tagText, percentMarker, discountIndex);
         if (nthItem == null || nthItem < 2 || discountPercent == null || discountPercent <= 0 || discountPercent >= 100) {
             return null;
         }
@@ -92,6 +82,64 @@ public final class MigrosEffectivePriceCampaignParser {
         } catch (NumberFormatException ex) {
             return null;
         }
+    }
+
+    private static Integer firstPositiveIntBefore(String text, String marker) {
+        int markerIndex = text.indexOf(marker);
+        if (markerIndex < 0) {
+            return null;
+        }
+        return firstPositiveIntBefore(text, markerIndex);
+    }
+
+    private static Integer firstPositiveIntBefore(String text, int endExclusive) {
+        String token = scanNumberBackward(text, endExclusive - 1);
+        return parsePositiveInt(token);
+    }
+
+    private static Integer firstPositiveIntAfter(String text, String afterMarker, String beforeMarker) {
+        int afterIndex = text.indexOf(afterMarker);
+        if (afterIndex < 0) {
+            return null;
+        }
+        int start = afterIndex + afterMarker.length();
+        int end = text.indexOf(beforeMarker, start);
+        if (end < 0) {
+            return null;
+        }
+        return firstPositiveIntBetween(text, start, end);
+    }
+
+    private static Integer firstPositiveIntBetween(String text, int startInclusive, int endExclusive) {
+        String token = scanNumberForward(text, startInclusive, endExclusive);
+        return parsePositiveInt(token);
+    }
+
+    private static String scanNumberBackward(String text, int startIndex) {
+        int end = startIndex;
+        while (end >= 0 && !Character.isDigit(text.charAt(end))) {
+            end--;
+        }
+        if (end < 0) {
+            return "";
+        }
+        int start = end;
+        while (start >= 0 && Character.isDigit(text.charAt(start))) {
+            start--;
+        }
+        return text.substring(start + 1, end + 1);
+    }
+
+    private static String scanNumberForward(String text, int startInclusive, int endExclusive) {
+        int start = startInclusive;
+        while (start < endExclusive && !Character.isDigit(text.charAt(start))) {
+            start++;
+        }
+        int end = start;
+        while (end < endExclusive && Character.isDigit(text.charAt(end))) {
+            end++;
+        }
+        return start < end ? text.substring(start, end) : "";
     }
 
     private static int greatestCommonDivisor(int left, int right) {

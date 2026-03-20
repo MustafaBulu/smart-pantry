@@ -4,6 +4,7 @@ import com.mustafabulu.smartpantry.common.enums.Marketplace;
 import com.mustafabulu.smartpantry.common.dto.response.BulkAddResponse;
 import com.mustafabulu.smartpantry.common.model.Category;
 import com.mustafabulu.smartpantry.common.model.MarketplaceProduct;
+import com.mustafabulu.smartpantry.common.service.MarketplaceCatalogUrlFetchService.CatalogUrlProductCandidate;
 import com.mustafabulu.smartpantry.common.repository.CategoryRepository;
 import com.mustafabulu.smartpantry.common.repository.MarketplaceProductRepository;
 import com.mustafabulu.smartpantry.common.repository.PriceHistoryRepository;
@@ -17,13 +18,16 @@ import org.springframework.core.task.TaskExecutor;
 import org.springframework.http.HttpStatus;
 
 import java.math.BigDecimal;
+import java.util.Map;
 import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -56,11 +60,15 @@ class MarketplaceProductServiceTest {
     @Mock
     private MarketplaceCategorySearchService marketplaceCategorySearchService;
 
+    @Mock
+    private MarketplaceCatalogUrlFetchResolverService catalogUrlFetchResolverService;
+
     @InjectMocks
     private MarketplaceProductService service;
 
     @BeforeEach
     void setUp() {
+        service.setCatalogUrlFetchResolverService(catalogUrlFetchResolverService);
         lenient().when(connectorRegistry.get(Marketplace.YS)).thenReturn(Optional.of(ysConnector));
         lenient().when(connectorRegistry.get(Marketplace.MG)).thenReturn(Optional.of(mgConnector));
         lenient().when(ysConnector.buildProductUrl(any())).thenReturn("https://example/ys/1");
@@ -344,5 +352,98 @@ class MarketplaceProductServiceTest {
         var response = service.addProducts("YS", "Snacks", List.of(" ", "1"));
 
         assertTrue(response.failed() >= 1);
+    }
+
+    @Test
+    void syncCatalogFromUrlsReturnsEmptyWhenResolverUnavailable() {
+        service.setCatalogUrlFetchResolverService(null);
+
+        MarketplaceProductService.CatalogSyncResult result =
+                service.syncCatalogFromUrls(Marketplace.MG, List.of("https://example/catalog"));
+
+        assertEquals("MG", result.marketplaceCode());
+        assertEquals(0, result.createdCount());
+    }
+
+    @Test
+    void syncCatalogFromUrlsCreatesCategoryAndMarketplaceProduct() {
+        Category createdCategory = new Category();
+        createdCategory.setId(10L);
+        createdCategory.setName("Sut");
+        when(categoryRepository.findByNameIgnoreCase("Sut")).thenReturn(Optional.empty());
+        when(categoryRepository.save(any(Category.class))).thenReturn(createdCategory);
+        when(marketplaceProductRepository.findByMarketplaceAndCategory(Marketplace.MG, createdCategory))
+                .thenReturn(List.of());
+        when(catalogUrlFetchResolverService.fetchAllByUrl(Marketplace.MG, "https://example/catalog"))
+                .thenReturn(List.of(new CatalogUrlProductCandidate(
+                        "Sut",
+                        new MarketplaceCategoryFetchService.MarketplaceProductCandidate(
+                                Marketplace.MG,
+                                "mg-77",
+                                "Sek Sut 1 L",
+                                "Sek",
+                                "https://cdn.example.com/mg-77.jpg",
+                                new BigDecimal("44.90"),
+                                new BigDecimal("39.90"),
+                                new BigDecimal("60"),
+                                new BigDecimal("35.90"),
+                                2,
+                                1,
+                                new BigDecimal("22.45"),
+                                null,
+                                null,
+                                null
+                        )
+                )));
+        when(marketplaceProductRepository.save(any(MarketplaceProduct.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        MarketplaceProductService.CatalogSyncResult result =
+                service.syncCatalogFromUrls(Marketplace.MG, List.of("https://example/catalog"));
+
+        assertEquals(1, result.categoryCount());
+        assertEquals(1, result.createdCount());
+        verify(marketplaceProductRepository).save(any(MarketplaceProduct.class));
+    }
+
+    @Test
+    void syncCatalogForMarketplaceUpdatesExistingMetadata() {
+        Category category = new Category();
+        category.setName("Sut");
+        MarketplaceProduct existing = new MarketplaceProduct();
+        existing.setMarketplace(Marketplace.MG);
+        existing.setCategory(category);
+        existing.setExternalId("mg-1");
+        when(categoryRepository.findAll()).thenReturn(List.of(category));
+        when(marketplaceProductRepository.findByMarketplaceAndCategory(Marketplace.MG, category))
+                .thenReturn(List.of(existing));
+        when(marketplaceCategorySearchService.fetchByMarketplace("Sut", Marketplace.MG))
+                .thenReturn(List.of(new MarketplaceCategoryFetchService.MarketplaceProductCandidate(
+                        Marketplace.MG,
+                        "mg-1",
+                        "Sek Sut 1 L",
+                        "Sek",
+                        "https://cdn.example.com/mg-1.jpg",
+                        new BigDecimal("44.90"),
+                        new BigDecimal("39.90"),
+                        new BigDecimal("60"),
+                        new BigDecimal("35.90"),
+                        2,
+                        1,
+                        new BigDecimal("22.45"),
+                        null,
+                        null,
+                        null
+                )));
+
+        service.syncCatalogForMarketplace(Marketplace.MG);
+
+        verify(marketplaceProductRepository).saveAll(argThat(products -> {
+            List<MarketplaceProduct> list = new java.util.ArrayList<>();
+            products.forEach(list::add);
+            return list.size() == 1 &&
+                    "Sek".equals(list.getFirst().getBrandName()) &&
+                    "https://cdn.example.com/mg-1.jpg".equals(list.getFirst().getImageUrl());
+        }));
     }
 }

@@ -39,7 +39,8 @@ import static com.mustafabulu.smartpantry.common.core.response.ResponseMessages.
 public class SPExceptionHandler extends ResponseEntityExceptionHandler {
 
     @Override
-    protected @Nullable ResponseEntity<Object> handleMethodArgumentNotValid(
+    @SuppressWarnings("java:S2638")
+    protected ResponseEntity<Object> handleMethodArgumentNotValid(
             MethodArgumentNotValidException ex,
             HttpHeaders headers,
             HttpStatusCode status,
@@ -91,7 +92,8 @@ public class SPExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     @Override
-    protected @Nullable ResponseEntity<Object> handleMissingServletRequestParameter(
+    @SuppressWarnings("java:S2638")
+    protected ResponseEntity<Object> handleMissingServletRequestParameter(
             MissingServletRequestParameterException ex,
             HttpHeaders headers,
             HttpStatusCode status,
@@ -151,7 +153,8 @@ public class SPExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     @Override
-    protected @Nullable ResponseEntity<Object> handleExceptionInternal(
+    @SuppressWarnings("java:S2638")
+    protected ResponseEntity<Object> handleExceptionInternal(
             Exception ex,
             @Nullable Object body,
             HttpHeaders headers,

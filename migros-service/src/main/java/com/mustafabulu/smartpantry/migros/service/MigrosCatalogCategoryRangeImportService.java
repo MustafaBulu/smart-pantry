@@ -103,18 +103,17 @@ public class MigrosCatalogCategoryRangeImportService implements MarketplaceCatal
         int page = 1;
         int pageCount = 1;
 
-        while (page <= pageCount && page <= MAX_PAGE_LIMIT) {
+        boolean shouldContinue = true;
+        while (shouldContinue && page <= pageCount && page <= MAX_PAGE_LIMIT) {
             PageCollectResult pageResult = collectPage(sourceUrl, categoryId, page, pageCount, byExternalId);
-            if (pageResult == null) {
-                break;
+            shouldContinue = pageResult != null;
+            if (shouldContinue) {
+                pageCount = pageResult.nextPageCount();
+                totalPageCount += 1;
+                totalCollectedProductCount += pageResult.pageItemCount();
+                shouldContinue = !pageResult.shouldStop();
+                page += 1;
             }
-            pageCount = pageResult.nextPageCount();
-            totalPageCount += 1;
-            totalCollectedProductCount += pageResult.pageItemCount();
-            if (pageResult.shouldStop()) {
-                break;
-            }
-            page += 1;
         }
 
         return new CategoryCollectStats(totalPageCount, totalCollectedProductCount);

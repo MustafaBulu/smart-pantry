@@ -297,27 +297,26 @@ public class MarketplaceProductService {
         int updatedCount = 0;
         for (Map.Entry<String, MarketplaceMetadata> entry : fetched.entrySet()) {
             String externalId = normalizeExternalId(entry.getKey());
-            if (externalId == null) {
-                continue;
-            }
-            PreparedMarketplaceProduct prepared = prepareMarketplaceProduct(
-                    marketplace,
-                    category,
-                    externalId,
-                    connector,
-                    existingByExternalId
-            );
-            MarketplaceProduct marketplaceProduct = prepared.product();
-            boolean created = prepared.created();
-            boolean updated = applyCatalogMetadata(marketplaceProduct, entry.getValue());
-            if (!created && !updated) {
-                continue;
-            }
-            toSave.add(marketplaceProduct);
-            if (created) {
-                createdCount += 1;
-            } else {
-                updatedCount += 1;
+            if (externalId != null) {
+                PreparedMarketplaceProduct prepared = prepareMarketplaceProduct(
+                        marketplace,
+                        category,
+                        externalId,
+                        connector,
+                        existingByExternalId
+                );
+                MarketplaceProduct marketplaceProduct = prepared.product();
+                boolean created = prepared.created();
+                boolean updated = applyCatalogMetadata(marketplaceProduct, entry.getValue());
+                if (!created && !updated) {
+                    continue;
+                }
+                toSave.add(marketplaceProduct);
+                if (created) {
+                    createdCount += 1;
+                } else {
+                    updatedCount += 1;
+                }
             }
         }
         if (!toSave.isEmpty()) {
@@ -370,23 +369,20 @@ public class MarketplaceProductService {
         }
         String normalizedCategoryName = normalizeUrlCategoryName(fetchedCandidate.categoryName());
         String normalizedCategoryKey = normalizeCategoryName(normalizedCategoryName);
-        boolean newCategory = false;
-        Category category = categoryByName.get(normalizedCategoryKey);
-        if (category == null) {
-            category = categoryRepository.findByNameIgnoreCase(normalizedCategoryName)
-                    .orElseGet(() -> {
-                        Category createdCategory = new Category();
-                        createdCategory.setName(normalizedCategoryName);
-                        return categoryRepository.save(createdCategory);
-                    });
-            categoryByName.put(normalizedCategoryKey, category);
-            newCategory = true;
-        }
-        Map<String, MarketplaceProduct> existingByExternalId = existingByCategoryKey.get(normalizedCategoryKey);
-        if (existingByExternalId == null) {
-            existingByExternalId = loadExistingByExternalId(marketplace, category);
-            existingByCategoryKey.put(normalizedCategoryKey, existingByExternalId);
-        }
+        boolean newCategory = !categoryByName.containsKey(normalizedCategoryKey);
+        Category category = categoryByName.computeIfAbsent(normalizedCategoryKey, key ->
+                categoryRepository.findByNameIgnoreCase(normalizedCategoryName)
+                        .orElseGet(() -> {
+                            Category createdCategory = new Category();
+                            createdCategory.setName(normalizedCategoryName);
+                            return categoryRepository.save(createdCategory);
+                        })
+        );
+        Map<String, MarketplaceProduct> existingByExternalId =
+                existingByCategoryKey.computeIfAbsent(
+                        normalizedCategoryKey,
+                        key -> loadExistingByExternalId(marketplace, category)
+                );
         String externalId = normalizeExternalId(candidate.externalId());
         if (externalId == null) {
             return null;

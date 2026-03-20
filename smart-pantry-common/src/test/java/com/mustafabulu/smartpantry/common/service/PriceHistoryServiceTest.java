@@ -5,6 +5,8 @@ import com.mustafabulu.smartpantry.common.dto.response.CategoryPriceSummaryRespo
 import com.mustafabulu.smartpantry.common.dto.response.PriceHistoryResponse;
 import com.mustafabulu.smartpantry.common.enums.Marketplace;
 import com.mustafabulu.smartpantry.common.model.Category;
+import com.mustafabulu.smartpantry.common.model.MigrosPriceHistoryCampaign;
+import com.mustafabulu.smartpantry.common.model.MarketplaceProduct;
 import com.mustafabulu.smartpantry.common.model.PriceHistory;
 import com.mustafabulu.smartpantry.common.model.Product;
 import com.mustafabulu.smartpantry.common.repository.CategoryRepository;
@@ -216,5 +218,78 @@ class PriceHistoryServiceTest {
         assertTrue(byMarketplace.containsKey("YS"));
         assertTrue(byMarketplace.get("MG").availabilityScore().doubleValue() < 40.0);
         assertNotEquals(byMarketplace.get("MG").availabilityScore(), byMarketplace.get("YS").availabilityScore());
+    }
+
+    @Test
+    void getProductPricesUsesEffectiveCampaignPriceAndFlagsHighOpportunity() {
+        Product product = new Product();
+        product.setId(7L);
+        product.setName("Kola");
+        when(productRepository.findById(7L)).thenReturn(Optional.of(product));
+
+        List<PriceHistory> histories = new java.util.ArrayList<>();
+        List<MigrosPriceHistoryCampaign> campaigns = new java.util.ArrayList<>();
+        for (int i = 0; i < 6; i += 1) {
+            LocalDateTime recordedAt = LocalDateTime.of(2026, 2, i + 1, 10, 0);
+
+            MarketplaceProduct mgMarketplaceProduct = new MarketplaceProduct();
+            mgMarketplaceProduct.setId(100L + i);
+            PriceHistory mgHistory = new PriceHistory();
+            mgHistory.setId(1000L + i);
+            mgHistory.setProduct(product);
+            mgHistory.setMarketplaceProduct(mgMarketplaceProduct);
+            mgHistory.setMarketplace(Marketplace.MG);
+            mgHistory.setPrice(new BigDecimal("100.00"));
+            mgHistory.setRecordedAt(recordedAt);
+            histories.add(mgHistory);
+
+            MigrosPriceHistoryCampaign campaign = new MigrosPriceHistoryCampaign();
+            campaign.setMarketplaceProductId(100L + i);
+            campaign.setProductId(7L);
+            campaign.setRecordedDate(recordedAt.toLocalDate());
+            campaign.setEffectivePrice(i < 3 ? new BigDecimal("50.00") : new BigDecimal("100.00"));
+            campaigns.add(campaign);
+
+            PriceHistory ysHistory = new PriceHistory();
+            ysHistory.setId(2000L + i);
+            ysHistory.setProduct(product);
+            ysHistory.setMarketplace(Marketplace.YS);
+            ysHistory.setPrice(new BigDecimal("95.00"));
+            ysHistory.setRecordedAt(recordedAt);
+            histories.add(ysHistory);
+        }
+
+        when(priceHistoryRepository.findByProductIdAndFilters(
+                org.mockito.Mockito.eq(7L),
+                org.mockito.Mockito.isNull(),
+                org.mockito.Mockito.any(LocalDateTime.class),
+                org.mockito.Mockito.isNull()
+        )).thenReturn(histories);
+        when(migrosPriceHistoryCampaignRepository.findByProductIdAndDateBetween(
+                org.mockito.Mockito.eq(7L),
+                org.mockito.Mockito.any(LocalDate.class),
+                org.mockito.Mockito.any(LocalDate.class)
+        )).thenReturn(campaigns);
+
+        List<PriceHistoryResponse> responses = priceHistoryService.getProductPrices(
+                7L,
+                null,
+                LocalDateTime.now().minusYears(1),
+                null,
+                false,
+                true
+        );
+
+        List<PriceHistoryResponse> mgResponses = responses.stream()
+                .filter(response -> "MG".equals(response.marketplaceCode()))
+                .toList();
+        assertEquals(6, mgResponses.size());
+        assertTrue(mgResponses.stream().anyMatch(response -> new BigDecimal("50.00").compareTo(response.price()) == 0));
+        assertTrue(mgResponses.stream().allMatch(response -> "Yuksek".equals(response.opportunityLevel())));
+    }
+
+    @Test
+    void getCategorySummaryThrowsWhenCategoryNameBlank() {
+        assertThrows(SPException.class, () -> priceHistoryService.getCategorySummary(" ", null, null, null));
     }
 }

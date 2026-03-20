@@ -3,29 +3,40 @@ package com.mustafabulu.smartpantry.common.service;
 import com.mustafabulu.smartpantry.common.core.exception.SPException;
 import com.mustafabulu.smartpantry.common.dto.response.CategoryResponse;
 import com.mustafabulu.smartpantry.common.dto.response.MarketplaceProductCandidateResponse;
+import com.mustafabulu.smartpantry.common.dto.response.MarketplaceProductEntryResponse;
 import com.mustafabulu.smartpantry.common.dto.response.MarketplaceProductMatchPairResponse;
+import com.mustafabulu.smartpantry.common.enums.Marketplace;
 import com.mustafabulu.smartpantry.common.model.Category;
 import com.mustafabulu.smartpantry.common.model.MarketplaceManualMatch;
+import com.mustafabulu.smartpantry.common.model.MarketplaceProduct;
+import com.mustafabulu.smartpantry.common.model.PriceHistory;
+import com.mustafabulu.smartpantry.common.model.Product;
 import com.mustafabulu.smartpantry.common.dto.response.MarketplaceProductMatchScoreResponse;
 import com.mustafabulu.smartpantry.common.repository.CategoryRepository;
 import com.mustafabulu.smartpantry.common.repository.MarketplaceManualMatchRepository;
 import com.mustafabulu.smartpantry.common.repository.MarketplaceProductRepository;
+import com.mustafabulu.smartpantry.common.repository.PriceHistoryRepository;
 import com.mustafabulu.smartpantry.common.repository.ProductRepository;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Optional;
+import java.math.BigDecimal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -47,6 +58,14 @@ class CategoryServiceTest {
     @Mock
     @SuppressWarnings("unused")
     private MarketplaceManualMatchRepository marketplaceManualMatchRepository;
+
+    @Mock
+    @SuppressWarnings("unused")
+    private PriceHistoryRepository priceHistoryRepository;
+
+    @Mock
+    @SuppressWarnings("unused")
+    private MarketplaceCategorySearchService marketplaceCategorySearchService;
 
     @Mock
     @SuppressWarnings("unused")
@@ -279,6 +298,147 @@ class CategoryServiceTest {
         assertEquals("ys-manual", response.getFirst().ys().externalId());
         assertEquals("mg-manual", response.getFirst().mg().externalId());
         assertTrue(response.getFirst().score().score() >= 1d);
+    }
+
+    @Test
+    void saveManualMarketplaceMatchStoresNormalizedIds() {
+        Category category = new Category();
+        category.setId(3L);
+        when(categoryRepository.findById(3L)).thenReturn(Optional.of(category));
+        when(marketplaceManualMatchRepository.findByCategoryIdAndYsExternalIdAndMgExternalId(3L, "ys-1", "mg-1"))
+                .thenReturn(Optional.empty());
+
+        categoryService.saveManualMarketplaceMatch(3L, " YS-1 ", " MG-1 ");
+
+        verify(marketplaceManualMatchRepository).deleteByCategoryIdAndYsExternalId(3L, "ys-1");
+        verify(marketplaceManualMatchRepository).deleteByCategoryIdAndMgExternalId(3L, "mg-1");
+        verify(marketplaceManualMatchRepository).saveAndFlush(argThat(match ->
+                match.getCategory() == category &&
+                        "ys-1".equals(match.getYsExternalId()) &&
+                        "mg-1".equals(match.getMgExternalId())
+        ));
+    }
+
+    @Test
+    void saveManualMarketplaceMatchReturnsWhenConflictAlreadyExistsAfterRetryCheck() {
+        Category category = new Category();
+        category.setId(4L);
+        MarketplaceManualMatch existing = new MarketplaceManualMatch();
+        when(categoryRepository.findById(4L)).thenReturn(Optional.of(category));
+        when(marketplaceManualMatchRepository.findByCategoryIdAndYsExternalIdAndMgExternalId(4L, "ys-2", "mg-2"))
+                .thenReturn(Optional.empty(), Optional.of(existing));
+        doThrow(new DataIntegrityViolationException("dup"))
+                .when(marketplaceManualMatchRepository)
+                .saveAndFlush(any(MarketplaceManualMatch.class));
+
+        assertDoesNotThrow(() -> categoryService.saveManualMarketplaceMatch(4L, "ys-2", "mg-2"));
+    }
+
+    @Test
+    void listMarketplaceCandidatesInfersYsBrandFromMigrosCandidates() {
+        Category category = new Category();
+        category.setId(5L);
+        category.setName("Kola");
+        when(categoryRepository.findById(5L)).thenReturn(Optional.of(category));
+        when(marketplaceCategorySearchService.fetchAll("Kola")).thenReturn(List.of(
+                new MarketplaceCategoryFetchService.MarketplaceProductCandidate(
+                        Marketplace.MG, "mg-1", "Coca Cola 1 L", "Coca-Cola", "mg.jpg",
+                        new BigDecimal("40.00"), null, null, null, null, null, null, "ml", 1000, null
+                ),
+                new MarketplaceCategoryFetchService.MarketplaceProductCandidate(
+                        Marketplace.YS, "ys-1", "Coca Cola 1 L", "", "ys.jpg",
+                        new BigDecimal("39.00"), null, null, null, null, null, null, "ml", 1000, null
+                )
+        ));
+
+        List<MarketplaceProductCandidateResponse> result = categoryService.listMarketplaceCandidates(5L);
+
+        assertEquals(2, result.size());
+        assertEquals("Coca-Cola", result.get(1).brandName());
+    }
+
+    @Test
+    void listMarketplaceAddedProductsUsesCandidateFallbackAndPersistsMissingMetadata() {
+        Category category = new Category();
+        category.setId(8L);
+        category.setName("Sut");
+        when(categoryRepository.findById(8L)).thenReturn(Optional.of(category));
+        MarketplaceProduct marketplaceProduct = new MarketplaceProduct();
+        marketplaceProduct.setId(11L);
+        marketplaceProduct.setMarketplace(Marketplace.MG);
+        marketplaceProduct.setCategory(category);
+        marketplaceProduct.setExternalId("mg-11");
+        when(marketplaceProductRepository.findByMarketplaceAndCategory(Marketplace.MG, category))
+                .thenReturn(List.of(marketplaceProduct));
+        when(priceHistoryRepository.findByMarketplaceProductIds(List.of(11L))).thenReturn(List.of());
+        when(marketplaceCategorySearchService.fetchAll("Sut")).thenReturn(List.of(
+                new MarketplaceCategoryFetchService.MarketplaceProductCandidate(
+                        Marketplace.MG,
+                        "mg-11",
+                        "Sek Sut 1 L",
+                        "Sek",
+                        "https://cdn.example.com/mg-11.jpg",
+                        new BigDecimal("44.90"),
+                        new BigDecimal("39.90"),
+                        new BigDecimal("60"),
+                        new BigDecimal("35.90"),
+                        2,
+                        1,
+                        new BigDecimal("22.45"),
+                        "ml",
+                        1000,
+                        null
+                )
+        ));
+
+        List<MarketplaceProductEntryResponse> result = categoryService.listMarketplaceAddedProducts(8L, "MG");
+
+        assertEquals(1, result.size());
+        assertEquals("Sek Sut 1 L", result.getFirst().name());
+        assertEquals("Sek", result.getFirst().brandName());
+        assertEquals("https://cdn.example.com/mg-11.jpg", result.getFirst().imageUrl());
+        verify(marketplaceProductRepository).saveAll(List.of(marketplaceProduct));
+    }
+
+    @Test
+    void listAllMarketplaceAddedProductsReturnsGroupedResponses() {
+        Category category = new Category();
+        category.setId(9L);
+        category.setName("Ayran");
+        MarketplaceProduct marketplaceProduct = new MarketplaceProduct();
+        marketplaceProduct.setId(21L);
+        marketplaceProduct.setMarketplace(Marketplace.MG);
+        marketplaceProduct.setCategory(category);
+        marketplaceProduct.setExternalId("mg-21");
+        marketplaceProduct.setBrandName("Pinar");
+        marketplaceProduct.setImageUrl("img");
+        PriceHistory history = new PriceHistory();
+        Product product = new Product();
+        product.setId(31L);
+        product.setName("Pinar Ayran 1 L");
+        history.setProduct(product);
+        history.setMarketplaceProduct(marketplaceProduct);
+        history.setPrice(new BigDecimal("50.00"));
+        when(marketplaceProductRepository.findByMarketplace(Marketplace.MG)).thenReturn(List.of(marketplaceProduct));
+        when(priceHistoryRepository.findByMarketplaceProductIds(List.of(21L))).thenReturn(List.of(history));
+
+        var result = categoryService.listAllMarketplaceAddedProducts("MG");
+
+        assertEquals(1, result.size());
+        assertEquals(9L, result.getFirst().categoryId());
+        assertEquals("Pinar Ayran 1 L", result.getFirst().name());
+    }
+
+    @Test
+    void toProductSignatureRemovesAttachedQuantityAndPackTokens() throws Exception {
+        assertEquals("coca cola", invokeProductSignature("Coca Cola 250g 2li Paket"));
+        assertEquals("sek sut", invokeProductSignature("Sek Sut 1lt"));
+    }
+
+    private String invokeProductSignature(String value) throws Exception {
+        Method method = CategoryService.class.getDeclaredMethod("toProductSignature", String.class);
+        method.setAccessible(true);
+        return (String) method.invoke(categoryService, value);
     }
 
 }
