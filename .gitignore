@@ -67,3 +67,15 @@ seed_price_history_last_year.sql
 
 # Generated frontend static export copied into backend resources
 src/main/resources/static/
+
+# Local docker override
+docker-compose.override.yml
+
+# Local analysis and scratch artifacts
+keywords.csv
+keywords.xlsx
+match-audit-*.json
+match-audit-*.txt
+tmp-migros-*.js
+tmp-migros-*.html
+tmp-migros-*.json
