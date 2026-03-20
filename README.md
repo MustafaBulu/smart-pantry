@@ -203,3 +203,9 @@ curl "http://localhost:8080/marketplaces/products?marketplaceCode=YS&categoryNam
 - GitHub Actions workflow: `.github/workflows/ci.yml`
 - Backend: Maven tests
 - Frontend: lint + typecheck + build
+- SonarCloud: backend+frontend CI sonrası çalışır (secret varsa).
+
+SonarCloud için GitHub repo ayarları:
+- `SONAR_TOKEN` (Actions Secret) zorunlu
+- `SONAR_ORGANIZATION` (Actions Variable) opsiyonel, default: repo owner
+- `SONAR_PROJECT_KEY` (Actions Variable) opsiyonel, default: `<owner>_<repo>`

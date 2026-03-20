@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ main, master ]
 
+permissions:
+  contents: read
+
 jobs:
   backend:
     runs-on: ubuntu-latest
@@ -41,3 +44,32 @@ jobs:
         run: npm run typecheck
       - name: Build
         run: npm run build
+
+  sonarcloud:
+    name: SonarCloud
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    if: ${{ secrets.SONAR_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: SonarCloud Scan
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
+          SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+        run: |
+          PROJECT_KEY="${SONAR_PROJECT_KEY:-${GITHUB_REPOSITORY/\//_}}"
+          ORGANIZATION="${SONAR_ORGANIZATION:-${GITHUB_REPOSITORY_OWNER}}"
+          ./mvnw -B -DskipTests verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
+            -Dsonar.host.url=https://sonarcloud.io \
+            -Dsonar.token="${SONAR_TOKEN}" \
+            -Dsonar.organization="${ORGANIZATION}" \
+            -Dsonar.projectKey="${PROJECT_KEY}"
